@@ -731,7 +731,7 @@ function makeApi(url, key) {
       return ok(await sb.from('team_members').select('id,full_name,role,photo_url')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
-    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,photo_url')); },
+    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url')); },
     async stages() {
       return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable').eq('active', true).order('sort_order'));
     },
@@ -1047,17 +1047,28 @@ function contactedTitle(p) {
   const by = firstName(p.contacted_by);
   return 'Contacted' + (by ? ' by ' + by : '') + ', ' + rel(p.contacted_at);
 }
+// Pilot rule: agents still work their leads in Follow Up Boss. A LoopIn edit would stop the sync
+// refreshing the lead, so a lead is editable only when its owner uses LoopIn.
+function canEdit(p) {
+  const m = p && p.owner_id ? state.teamMap.get(p.owner_id) : null;
+  return !!(m && m.can_sign_in === true && m.active);
+}
+function readOnlyWhy(p) {
+  if (!p.owner_id) return 'Read-only. This lead has no agent in LoopIn yet.';
+  const n = firstName(p.owner_id) || 'The agent';
+  return `Read-only. ${n} still works this lead in Follow Up Boss. Changes there copy into LoopIn.`;
+}
 function stageSelect(p, label) {
   const cur = stageIdShown(p);
   const known = state.stageMap.has(cur);
-  return `<select class="stage-select" data-stage="${esc(p.id)}" aria-label="${esc(label)}" ${busy.has(p.id) ? 'disabled' : ''}>` +
+  return `<select class="stage-select" data-stage="${esc(p.id)}" aria-label="${esc(label)}" ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''} ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}>` +
     (known ? '' : '<option value="" selected disabled>—</option>') +
     state.stages.map(s => `<option value="${s.id}" ${s.id === cur ? 'selected' : ''}>${esc(s.name)}</option>`).join('') + '</select>';
 }
 function bestEmail(p) { const e = p.person_emails || []; return e.find(x => !x.is_relay) || e[0]; }
 function contactedBox(p, short) {
   const on = isContacted(p);
-  return `<label class="contacted" title="${esc(contactedTitle(p))}"><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) ? 'disabled' : ''}>${short ? (on ? 'Contacted' : 'New') : (on ? 'Contacted' : 'Not contacted')}</label>`;
+  return `<label class="contacted" title="${esc(canEdit(p) ? contactedTitle(p) : readOnlyWhy(p))}"><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>${short ? (on ? 'Contacted' : 'New') : (on ? 'Contacted' : 'Not contacted')}</label>`;
 }
 function ownerChip(p) {
   return p.owner_id ? `<span class="who">${avatar(p.owner_id, 'sm')}${esc(memberName(p.owner_id) || 'Team member')}</span>` : '<span class="sub">Unassigned</span>';
@@ -1150,6 +1161,7 @@ function onChange(e) {
 }
 async function toggleContacted(id, on) {
   const p = byId.get(id); if (!p) return;
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); refresh(); return; }
   await write(id, { contacted: on }, () => api.setContacted(id, on, state.me.id));
 }
 
@@ -1158,6 +1170,7 @@ function missingFields(p) { return state.fields.filter(f => f.required_for_nonwo
 async function changeStage(id, stageId) {
   const p = byId.get(id), st = state.stageMap.get(stageId);
   if (!p || !st || stageId === p.stage_id) { refresh(); return; }
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); refresh(); return; }
   if (st.is_nonworkable) {
     const miss = missingFields(p);
     if (miss.length || !p.nonworkable_reason) { openGate(p, st, miss); return; }
@@ -1296,16 +1309,16 @@ function renderPanel() {
   else if (!d) { inq = notes = '<div class="loading-s">Loading…</div>'; }
   else {
     inq = d.inquiries.map(i => `<div class="inq"><div><b>${esc(i.listing_address || 'No listing')}</b>${i.listing_price != null ? ` <span class="sub num">${esc(money(i.listing_price))}/mo</span>` : ''}</div><div class="sub">${esc(fmtShort(i.received_at))} · ${esc(i.source)}</div>${i.message ? `<div>${esc(i.message)}</div>` : ''}</div>`).join('') || '<div class="sub">None</div>';
-    notes = `<div class="notebox"><textarea id="newNote" placeholder="Add a note" aria-label="Add a note"></textarea><div class="row"><button class="btn small primary" id="saveNote" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Save</button></div></div>
-      <div class="timeline">${d.notes.map(noteHtml).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
+    const box = canEdit(p) ? `<div class="notebox"><textarea id="newNote" placeholder="Add a note" aria-label="Add a note"></textarea><div class="row"><button class="btn small primary" id="saveNote" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Save</button></div></div>` : '';
+    notes = box + `<div class="timeline">${d.notes.map(noteHtml).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
   }
   const on = isContacted(p);
   const by = firstName(p.contacted_by);
   el.innerHTML = head(esc(p._name || '(no name)')) + `
-      <div class="row"><label class="contacted"><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>
+      <div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>
       <span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>
     </div>
-    <div class="panel-body">${contact}${details}
+    <div class="panel-body">${canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
   $('#closePanel').onclick = closePanel;
@@ -1316,7 +1329,9 @@ function renderPanel() {
 $('#panel').addEventListener('change', onChange);
 
 async function saveNote() {
-  const id = state.open, body = ($('#newNote').value || '').trim();
+  const id = state.open, body = ($('#newNote') ? $('#newNote').value : '').trim();
+  const pp = byId.get(id);
+  if (!pp || !canEdit(pp)) { toast(pp ? readOnlyWhy(pp) : 'This person is not loaded.'); return; }
   if (!body) { toast('Write the note first.'); $('#newNote').focus(); return; }
   const key = 'n:' + id;
   if (busy.has(key)) return;
