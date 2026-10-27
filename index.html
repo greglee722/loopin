@@ -630,6 +630,11 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 @media (min-width: 861px) { #view-people table { min-width: 1060px; } }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
+.tile.alert .v { color: var(--bad); }
+.tile.static { cursor: default; } .tile.static:hover { border-color: var(--line); }
+.dash-head .loadline { flex-basis: 100%; }
+.dash .card > h2 .pill { font-weight: 600; }
+.hitgroup .li.hit { padding-left: 16px; }
 .sortbtn { cursor: pointer; }
 .panel-head .row.top { justify-content: space-between; flex-wrap: nowrap; }
 .panel-head h2 { overflow-wrap: anywhere; min-width: 0; }
@@ -648,9 +653,7 @@ th.num-col button { white-space: nowrap; }
   .sm-only { display: inline; }
 }
 @media (max-width: 600px) {
-  .nav { display: none; }
-  main { padding-bottom: 24px; }
-  .toast { bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+  .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .me .nm { display: none; }
   .toolbar select.btn { flex: 1 1 130px; min-width: 0; }
   .authcard { margin-top: 6vh; }
@@ -665,7 +668,8 @@ th.num-col button { white-space: nowrap; }
     <span class="wordmark" aria-hidden="true">l<svg class="oo" viewBox="0 0 130.4 56.8" aria-hidden="true"><circle cx="32.65" cy="28.4" r="22.2" fill="none" stroke="currentColor" stroke-width="13"/><circle cx="97.85" cy="28.4" r="22.2" fill="none" style="stroke:var(--brand)" stroke-width="13"/></svg>pin</span>
   </div>
   <nav class="nav" id="nav" aria-label="Main" hidden>
-    <button data-view="people" aria-current="page">People</button>
+    <button data-view="dash" aria-current="page">Dashboard</button>
+    <button data-view="people">People</button>
   </nav>
   <input class="topsearch" id="search" type="search" placeholder="Name, email or phone" aria-label="Search people" autocomplete="off" hidden>
   <div class="spacer"></div>
@@ -674,6 +678,8 @@ th.num-col button { white-space: nowrap; }
 
 <main>
   <section id="view-auth" hidden></section>
+
+  <section class="view" id="view-dash" hidden><div id="dash"></div></section>
 
   <section class="view" id="view-people" hidden>
     <div class="listhead"><h1>People</h1></div>
@@ -731,7 +737,7 @@ function makeApi(url, key) {
       return ok(await sb.from('team_members').select('id,full_name,role,photo_url')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
-    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url')); },
+    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on')); },
     async stages() {
       return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable').eq('active', true).order('sort_order'));
     },
@@ -760,6 +766,13 @@ function makeApi(url, key) {
         sb.from('lead_collaborators').select('person_id,member_id').eq('person_id', id),
       ]);
       return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators) };
+    },
+    async appointments(fromIso, toIso) {
+      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,canceled,canceled_at')
+        .gte('starts_at', fromIso).lt('starts_at', toIso).eq('canceled', false).is('canceled_at', null).order('starts_at'));
+    },
+    async hitLists() {
+      return ok(await sb.from('hit_list').select('person_id,member_id,position,next_step,added_at').order('member_id').order('position'));
     },
     async row(id) { return ok(await sb.from('people').select(PERSON_COLS).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
@@ -835,7 +848,9 @@ const state = {
   sort: { key: 'created', dir: 'desc' }, limit: SHOW,
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
+  view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
+const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
 let all = [];                 // every loaded person
 const idx = new Map();        // id -> position in `all`
 const byId = new Map();       // id -> person
@@ -891,7 +906,7 @@ document.addEventListener('keydown', e => {
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
   $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
-  $('#view-people').hidden = !on;
+  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
@@ -923,7 +938,9 @@ function resetApp() {
   loadGen++;
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
   Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, limit: SHOW,
-    loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false });
+    loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
+    view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
+  inqCache.clear();
   $('#search').value = '';
   closeModal();
 }
@@ -949,10 +966,10 @@ async function start(session) {
     state.stages = stages; state.stageMap = new Map(stages.map(s => [s.id, s]));
     state.fields = fields;
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
-  setChrome(true);
   state.loading = true;
-  renderMe(); renderFilters(); renderList();
-  loadPeople(myGen);
+  state.view = location.hash === '#people' ? 'people' : 'dash';
+  renderMe(); renderFilters(); setChrome(true);
+  loadPeople(myGen); loadAppts(); loadHits();
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
   if (!/^#p\//.test(location.hash) && /^#p\/[0-9a-f-]{36}$/i.test(back)) { try { history.replaceState(null, '', location.href.split('#')[0] + back); } catch (_) {} }
   route();
@@ -1102,6 +1119,7 @@ function rowHtml(p) {
 }
 function renderList() {
   if (!state.me) return;
+  if (state.view === 'dash') { renderDash(); return; }
   const list = filtered(), n = list.length;
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
   for (const [id, key] of [['#thCreated', 'created'], ['#thActivity', 'activity']]) {
@@ -1116,7 +1134,7 @@ function renderList() {
 }
 function resetPaging() { state.limit = SHOW; renderList(); }
 
-$('#search').addEventListener('input', e => { state.q = e.target.value; resetPaging(); });
+$('#search').addEventListener('input', e => { state.q = e.target.value; state.limit = SHOW; if (state.view === 'dash') go('people'); else renderList(); });
 $('#fAgent').addEventListener('change', e => { state.agent = e.target.value; resetPaging(); });
 $('#fStage').addEventListener('change', e => { state.stage = e.target.value; resetPaging(); });
 $('#fUnc').addEventListener('click', () => { state.unc = !state.unc; $('#fUnc').setAttribute('aria-pressed', String(state.unc)); resetPaging(); });
@@ -1228,9 +1246,27 @@ function openGate(p, st, miss) {
 }
 
 // ───────── Person panel ─────────
+// Routes: #dash, #people, #p/<uuid> (the person opens over whichever view is showing).
 function route() {
-  const m = /^#p\/([0-9a-f-]{36})$/i.exec(location.hash);
-  if (m && UUID.test(m[1]) && state.me) showPanel(m[1].toLowerCase()); else if (state.open) hidePanel();
+  if (!state.me) return;
+  const h = location.hash, m = /^#p\/([0-9a-f-]{36})$/i.exec(h);
+  if (m && UUID.test(m[1])) { showPanel(m[1].toLowerCase()); return; }
+  if (state.open) hidePanel();
+  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : state.view;
+  applyView();
+}
+function go(view) {
+  state.pushed = false; if (state.open) closePanelQuiet();
+  state.view = view;
+  const h = '#' + view;
+  if (location.hash !== h) location.hash = h; else applyView();
+}
+function applyView() {
+  if (!state.me) return;
+  const dash = state.view === 'dash';
+  $('#view-dash').hidden = !dash; $('#view-people').hidden = dash;
+  document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === state.view ? 'page' : 'false'));
+  if (dash) { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); } else renderList();
 }
 window.addEventListener('hashchange', route);
 function openPanel(id) {
@@ -1241,14 +1277,13 @@ function openPanel(id) {
 }
 function closePanel() {
   if (state.pushed) { state.pushed = false; history.back(); return; }
-  try { history.replaceState(null, '', location.href.split('#')[0]); } catch (_) {}
+  try { history.replaceState(null, '', location.href.split('#')[0] + '#' + state.view); } catch (_) {}
   hidePanel();
 }
 function closePanelQuiet() { state.open = null; state.detail = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
 function hidePanel() { closePanelQuiet(); }
 $('#scrim').addEventListener('click', closePanel);
-// The People button: close any open person and go to the top of the list.
-$('#nav').addEventListener('click', () => { if (state.open) closePanel(); window.scrollTo(0, 0); });
+$('#nav').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; go(b.dataset.view); window.scrollTo(0, 0); });
 
 async function showPanel(id) {
   if (state.open === id) return;
@@ -1260,6 +1295,7 @@ async function showPanel(id) {
     const d = await api.person(id);
     if (state.open !== id) return;
     state.detail = d;
+    if (d.inquiries && d.inquiries[0] && d.inquiries[0].listing_address) inqCache.set(id, d.inquiries[0].listing_address);
   } catch (e) {
     if (state.open !== id) return;
     state.detailErr = e.message;
@@ -1348,6 +1384,170 @@ async function saveNote() {
     toast(e.message || 'The note was not saved.');
   }
 }
+
+// ───────── Dashboard ─────────
+// "Today" and "this week" use the browser's local date. Never toISOString() for a local date.
+const pad2 = (n) => String(n).padStart(2, '0');
+const localKey = (t) => { const d = new Date(t); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+const dayStart = (off = 0) => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate() + off); };
+const fmtTime = (t) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const dateOnly = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+const daysFromToday = (d) => Math.round((d - dayStart(0)) / 864e5);
+const fmtMonthDay = (d) => d.toLocaleDateString('en-US', d.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+
+// Appointments for [start of today, start of today + 8 days) in local time. Reloaded when the Dashboard opens and the data is over 5 minutes old.
+async function loadAppts() {
+  if (state.apptBusy || !state.me) return;
+  const gen = loadGen; state.apptBusy = true;
+  try {
+    const rows = await api.appointments(dayStart(0).toISOString(), dayStart(8).toISOString());
+    if (gen !== loadGen) return;
+    state.appts = rows; state.apptErr = ''; state.apptsAt = Date.now();
+  } catch (e) { if (gen !== loadGen) return; state.apptErr = e.message; }
+  finally { if (gen === loadGen) { state.apptBusy = false; if (state.view === 'dash') renderDash(); } }
+}
+async function loadHits() {
+  if (!state.me) return;
+  const gen = loadGen;
+  try { const rows = await api.hitLists(); if (gen !== loadGen) return; state.hits = rows; state.hitErr = ''; }
+  catch (e) { if (gen !== loadGen) return; state.hitErr = e.message; }
+  if (gen === loadGen && state.view === 'dash') renderDash();
+}
+
+function renderDash() {
+  if (!state.me) return;
+  const t0 = +dayStart(0), t1 = +dayStart(1), t8 = +dayStart(8), w0 = +dayStart(-6), lw0 = +dayStart(-13);
+  let newToday = 0, newWeek = 0, lastWeek = 0;
+  const waiting = [], src = new Map(), per = new Map(), due = [];
+  const slot = (id) => { if (!per.has(id)) per.set(id, { week: 0, unc: 0 }); return per.get(id); };
+  for (const p of all) {
+    const c = p._c, st = stageOf(p);
+    if (c >= t0 && c < t1) newToday++;
+    if (c >= w0 && c < t1) { newWeek++; slot(p.owner_id).week++; const k = (p.source || '').trim() || 'Unknown'; src.set(k, (src.get(k) || 0) + 1); }
+    else if (c >= lw0 && c < w0) lastWeek++;
+    if (!p.contacted_at && !(st && st.closes_lead)) { waiting.push(p); slot(p.owner_id).unc++; }
+    if (st && st.is_nonworkable && p.nonworkable_reason === 'future_move_in') {
+      const mv = (p.custom || {}).move_in_date, d = dateOnly(mv && typeof mv === 'object' ? mv.from : '');
+      if (d) {
+        const days = daysFromToday(d), m = state.teamMap.get(p.owner_id), win = m && m.reminder_days != null ? m.reminder_days : 30;
+        if (days >= 0 && days <= win) due.push({ p, d, days });
+      }
+    }
+  }
+  waiting.sort((a, b) => b._c - a._c || (a.id < b.id ? -1 : 1));
+  due.sort((a, b) => a.d - b.d || (a.p.id < b.p.id ? -1 : 1));
+  const appts = state.appts.map(a => ({ a, t: Date.parse(a.starts_at) })).filter(x => !isNaN(x.t)).sort((x, y) => x.t - y.t);
+  const today = appts.filter(x => x.t >= t0 && x.t < t1), coming = appts.filter(x => x.t >= t1 && x.t < t8);
+  const next = today.find(x => x.t >= Date.now());
+  const apptsOf = (id) => today.filter(x => x.a.member_id === id).length;
+
+  const h = new Date().getHours();
+  const loadLine = state.loadFailed
+    ? `<span class="sub loadline">Counts are partial: some people did not load. <button class="btn small" id="dashRetry">Try again</button></span>`
+    : state.loading ? `<span class="sub loadline" id="dashLoad">${state.total != null ? `Counting… ${all.length.toLocaleString('en-US')} of ${state.total.toLocaleString('en-US')} loaded` : 'Counting…'}</span>` : '';
+  const head = `<div class="dash-head"><h1>${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'}, ${esc(state.me.full_name.split(' ')[0])}</h1><span class="sub">${esc(new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }))}</span>${loadLine}</div>`;
+  const diff = newWeek - lastWeek;
+  const tile = (k, v, sub, go, cls = '') => go
+    ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></button>`
+    : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
+  const tiles = `<div class="tiles">
+    ${tile('Team new leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
+    ${tile('Team not contacted', waiting.length.toLocaleString('en-US'), 'new leads not contacted yet', 'unc', waiting.length ? 'alert' : '')}
+    ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
+    ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
+  </div>`;
+
+  const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
+  const plink = (p, label) => `<a href="#p/${esc(p.id)}" class="lnk" data-openlead="${esc(p.id)}">${esc(label || p._name || '(no name)')}</a>`;
+  const who = (id) => id ? esc(memberName(id) || 'Team member') : 'Unassigned';
+
+  // Today's schedule
+  const schedule = `<section class="card"><h2>Today's schedule</h2>
+    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : today.map(({ a, t }) => {
+      const p = a.person_id ? byId.get(a.person_id) : null;
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span>${avatar(a.member_id, 'sm')}<div class="grow"><div class="name">${p ? plink(p, a.title) : esc(a.title)}</div><div class="sub">${who(a.member_id)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
+    }).join('') || '<div class="empty-s">No appointments today.</div>'}</section>`;
+
+  // Team Hit Lists (read-only): only agents who use LoopIn
+  const todayKey = localKey(Date.now());
+  const groups = state.team.filter(m => m.role === 'agent' && m.can_sign_in === true);
+  const hitRows = (m) => state.hits.filter(r => r.member_id === m.id).sort((a, b) => a.position - b.position).map((r, i) => {
+    const p = byId.get(r.person_id);
+    return `<div class="li hit"><span class="sub num">${i + 1}</span>${p ? av(p) : ''}<div class="grow"><div class="name">${p ? plink(p) : 'Lead not loaded'}${p && stageOf(p) ? ` <span class="pill info">${esc(stageOf(p).name)}</span>` : ''}</div><div class="sub">${esc(r.next_step) || 'No next step'}</div></div></div>`;
+  }).join('');
+  const hits = `<section class="card"><h2>Team Hit Lists</h2>${state.hitErr ? `<div class="empty-s">Could not load Hit Lists: ${esc(state.hitErr)}</div>` : groups.map(m => {
+    const n = state.hits.filter(r => r.member_id === m.id).length, rd = dateOnly(m.hit_reviewed_on);
+    const rv = m.hit_reviewed_on && String(m.hit_reviewed_on).slice(0, 10) === todayKey;
+    return `<details class="hitgroup" open><summary>${avatar(m.id, 'sm')}<b>${esc(m.full_name)}</b><span class="sub">${n} lead${n === 1 ? '' : 's'}</span><span class="spacer"></span>${rv ? '<span class="pill ok">reviewed today</span>' : `<span class="pill warn">${rd ? 'not reviewed since ' + esc(fmtMonthDay(rd)) : 'not reviewed yet'}</span>`}</summary>${hitRows(m) || '<div class="empty-s">No leads on the Hit List.</div>'}</details>`;
+  }).join('') || `<div class="empty-s">No active Hit Lists yet. Agents' Hit Lists show here once they use LoopIn.</div>`}</section>`;
+
+  // By agent
+  const members = state.team.filter(m => m.active);
+  const byAgent = `<section class="card"><h2>By agent</h2><div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>New this week</th><th>Not contacted</th><th>Appts today</th><th>Hit List</th></tr></thead><tbody>${members.map(m => {
+    const s = per.get(m.id) || { week: 0, unc: 0 }, uses = m.role === 'agent' && m.can_sign_in === true;
+    return `<tr data-agent-row="${esc(m.id)}"><td><button class="agentlink" data-agentgo="${esc(m.id)}" title="See ${esc(m.full_name)}'s leads">${avatar(m.id, 'sm')}${esc(m.full_name)}</button></td>
+      <td><button class="cnt num" data-agentgo="${esc(m.id)}" data-golist="week" title="${esc(m.full_name)}'s newest leads">${s.week}</button></td>
+      <td><button class="cnt" data-agentgo="${esc(m.id)}" data-golist="waiting" title="${esc(m.full_name)}'s leads not contacted yet">${s.unc ? `<span class="pill info num">${s.unc}</span>` : '<span class="sub">0</span>'}</button></td>
+      <td><span class="num">${apptsOf(m.id)}</span></td>
+      <td>${uses ? `<span class="num">${state.hits.filter(r => r.member_id === m.id).length}</span>` : '<span class="sub">—</span>'}</td></tr>`;
+  }).join('')}</tbody></table></div></section>`;
+
+  // New leads: the 6 newest not-contacted open leads
+  const newLeads = `<section class="card"><h2>New leads <span class="pill info">${waiting.length.toLocaleString('en-US')}</span><span class="spacer"></span><button class="btn small" data-go="unc">See all</button></h2>
+    ${waiting.slice(0, 6).map(p => {
+      const ph = (p.person_phones || [])[0], dg = ph ? String(ph.phone).replace(/\D/g, '') : '', addr = inqCache.get(p.id);
+      const ro = !canEdit(p);
+      return `<div class="li" data-newlead="${esc(p.id)}"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">${esc(p.source)} · ${esc(rel(p.created_at))}${addr ? ' · ' + esc(String(addr).split(',')[0]) : ''} · ${who(p.owner_id)}</div></div>
+        <span class="row">${ph ? `<a class="maillink num" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a><a class="btn small" href="sms:+${esc(dg)}">Text</a>` : '<span class="sub">no number yet</span>'}<label class="contacted" title="${esc(ro ? readOnlyWhy(p) : 'Mark as contacted')}"><input type="checkbox" data-contact="${esc(p.id)}" ${isContacted(p) ? 'checked' : ''} ${busy.has(p.id) || ro ? 'disabled' : ''}>Contacted</label></span></div>`;
+    }).join('') || '<div class="empty-s">Every new lead has been contacted.</div>'}</section>`;
+
+  // Coming up
+  const comingUp = `<section class="card"><h2>Coming up</h2>
+    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : coming.map(({ a, t }) => {
+      const p = a.person_id ? byId.get(a.person_id) : null;
+      const when = new Date(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(a.title)}</div><div class="sub">${who(a.member_id)}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
+      return p ? `<button class="li apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li">${inner}</div>`;
+    }).join('') || '<div class="empty-s">No upcoming appointments.</div>'}</section>`;
+
+  // Leads by source, this week
+  const rows = [...src.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  const top = rows.slice(0, 6), rest = rows.slice(6).reduce((n, r) => n + r[1], 0);
+  if (rest) top.push(['Other', rest]);
+  const mx = Math.max(1, ...top.map(r => r[1]));
+  const sources = `<section class="card"><h2>Leads by source, this week</h2>${top.length ? `<div class="bars">${top.map(([n, c]) => `<div class="bar"><span>${esc(n)}</span><span class="track"><span class="fill" style="width:${c / mx * 100}%"></span></span><span class="num">${c}</span></div>`).join('')}</div>` : '<div class="empty-s">No new leads this week.</div>'}</section>`;
+
+  // Needs a look: move-in reminders
+  const look = `<section class="card" id="dash-look"><h2>Needs a look</h2>
+    ${due.map(({ p, d, days }) => `<div class="li"><span class="dot off" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">Moves in ${esc(fmtMonthDay(d))}, ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}. Reach back out.</div></div><span class="sub">${who(p.owner_id)}</span></div>`).join('') || '<div class="empty-s">All clear.</div>'}</section>`;
+
+  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${look}</div></div>`;
+}
+
+// Open People with these filters set. Sorted by Created, newest first.
+function peopleWith(o = {}) {
+  state.q = ''; $('#search').value = '';
+  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc;
+  state.sort = { key: 'created', dir: 'desc' }; state.limit = SHOW;
+  renderFilters();
+  go('people');
+}
+$('#dash').addEventListener('click', e => {
+  const t = e.target;
+  if (t.closest('#dashRetry')) { retryLoad(); return; }
+  const g = t.closest('[data-go]');
+  if (g) {
+    const k = g.dataset.go;
+    if (k === 'look') { const el = $('#dash-look'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    else peopleWith({ unc: k === 'unc' });
+    return;
+  }
+  const a = t.closest('[data-agentgo]');
+  if (a) { peopleWith({ agent: state.me.role === 'manager' ? a.dataset.agentgo : '', unc: a.dataset.golist === 'waiting' }); return; }
+  const o = t.closest('[data-openlead]');
+  if (o) { e.preventDefault(); openPanel(o.dataset.openlead); }
+});
+$('#dash').addEventListener('change', onChange);
 
 // ───────── Start ─────────
 (async function init() {
