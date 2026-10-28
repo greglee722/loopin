@@ -693,6 +693,7 @@ th.num-col button { white-space: nowrap; }
     <button data-view="dash" aria-current="page">Dashboard</button>
     <button data-view="people">People</button>
     <button data-view="renewals" id="navRenew" hidden>Renewals<span class="count" id="renewCount"></span></button>
+    <button data-view="settings" id="navSettings" hidden>Settings</button>
   </nav>
   <input class="topsearch" id="search" type="search" placeholder="Name, email or phone" aria-label="Search people" autocomplete="off" hidden>
   <div class="spacer"></div>
@@ -707,6 +708,11 @@ th.num-col button { white-space: nowrap; }
   <section class="view" id="view-renew" hidden>
     <div class="listhead"><h1>Renewals</h1></div>
     <div id="renewBody"></div>
+  </section>
+
+  <section class="view" id="view-settings" hidden>
+    <div class="listhead"><h1>Settings</h1></div>
+    <div id="settingsBody"></div>
   </section>
 
   <section class="view" id="view-people" hidden>
@@ -832,6 +838,19 @@ function makeApi(url, key) {
     },
     async dismissListing(id, reason) { ok(await sb.rpc('pl_dismiss_listing', { p_id: id, p_reason: reason })); },
     async undismissListing(id) { ok(await sb.rpc('pl_undismiss_listing', { p_id: id })); },
+    // Settings (managers; row-level security allows these writes only for a manager)
+    async allStages() { return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable,active').order('sort_order')); },
+    async allFields() { return ok(await sb.from('custom_field_defs').select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').order('sort_order')); },
+    async allTeam() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,photo_url,reminder_days,hit_reviewed_on')); },
+    async updateStage(id, patch) { return ok(await sb.from('stages').update(patch).eq('id', id).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
+    async addStage(row) { return ok(await sb.from('stages').insert(row).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
+    async updateField(key, patch) { return ok(await sb.from('custom_field_defs').update(patch).eq('key', key).select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').single()); },
+    async addField(row) { return ok(await sb.from('custom_field_defs').insert(row).select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').single()); },
+    async addTagName(name) { return ok(await sb.from('tags').insert({ name }).select('name').single()); },
+    async deleteTag(name) { gone(await sb.from('tags').delete().eq('name', name).select('name')); },
+    async setAgentsTags(on) { return ok(await sb.from('team_settings').update({ agents_create_tags: !!on }).eq('id', 1).select('agents_create_tags').single()); },
+    async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
+    async addMember(row) { return ok(await sb.from('team_members').insert(row).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
     async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
@@ -908,6 +927,7 @@ const state = {
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
   sel: new Set(), onlyIds: null, bulk: null, list: [], shownIds: [],
   edit: null, lastEdit: null, tags: [], agentTags: false,
+  set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
   view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
@@ -969,7 +989,7 @@ document.addEventListener('keydown', e => {
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
   $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
-  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#navRenew').hidden = true; }
+  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
@@ -1003,7 +1023,8 @@ function resetApp() {
   Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
-    rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
+    set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
+  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
   inqCache.clear(); state.sel.clear();
   $('#search').value = '';
@@ -1032,7 +1053,7 @@ async function start(session) {
     state.fields = fields;
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   state.loading = true;
-  state.view = location.hash === '#people' ? 'people' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : 'dash';
+  state.view = location.hash === '#people' ? 'people' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
   renderMe(); renderFilters(); setChrome(true);
   loadPeople(myGen); loadAppts(); loadHits(); loadListings();
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
@@ -1216,7 +1237,7 @@ function rowHtml(p) {
 function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
-  if (state.view === 'renewals') return;
+  if (state.view === 'renewals' || state.view === 'settings') return;
   syncZFilter();
   const list = filtered(), n = list.length;
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
@@ -1544,7 +1565,7 @@ function route() {
   const h = location.hash, m = /^#p\/([0-9a-f-]{36})$/i.exec(h);
   if (m && UUID.test(m[1])) { showPanel(m[1].toLowerCase()); return; }
   if (state.open) hidePanel();
-  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : state.view;
+  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
   applyView();
 }
 function go(view) {
@@ -1556,11 +1577,13 @@ function go(view) {
 function applyView() {
   if (!state.me) return;
   if (state.view === 'renewals' && !(state.me.role === 'manager' && state.rOn)) state.view = 'dash';
+  if (state.view === 'settings' && state.me.role !== 'manager') state.view = 'dash';
   const v = state.view;
-  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals';
+  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings';
   document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
   renewChrome();
   if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); }
+  else if (v === 'settings') openSettings();
   else if (v === 'renewals') { if (Date.now() - state.renew.at > 300000) loadListings(); renderRenew(); }
   else renderList();
 }
@@ -2025,6 +2048,7 @@ const zillowUrl = (id) => /^[A-Za-z0-9_-]+$/.test(String(id || '')) ? `https://w
 function renewChrome() {
   const on = state.me && state.me.role === 'manager' && state.rOn;
   $('#navRenew').hidden = !on;
+  $('#navSettings').hidden = !(state.me && state.me.role === 'manager');
   const n = on && state.renew.loaded ? renewCount() : 0;
   $('#renewCount').textContent = n || '';
 }
@@ -2106,6 +2130,279 @@ $('#view-renew').addEventListener('change', e => {
   if (e.target.id === 'rAcct') { state.renew.acct = e.target.value; renderRenew(); }
   else if (e.target.id === 'rShowDis') { state.renew.showDismissed = e.target.checked; renderRenew(); }
 });
+
+// ───────── Settings (managers only) ─────────
+// Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
+const APP_VERSION = '1.6';
+const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
+const SET_PAGES = [['stages', 'Stages'], ['fields', 'Custom fields'], ['tags', 'Tags'], ['team', 'Team'], ['about', 'About']];
+const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
+const isMgr = () => !!state.me && state.me.role === 'manager';
+const ciEq = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
+async function loadSettingsData() {
+  const S = state.set;
+  const [stages, fields, tags, settings, team] = await Promise.all([api.allStages(), api.allFields(), api.tags(), api.settings(), api.allTeam()]);
+  S.stages = stages; S.fields = fields; S.tags = (tags || []).map(t => t.name); S.agentsTags = !!(settings && settings.agents_create_tags); S.team = team;
+  S.loaded = true; S.err = '';
+}
+async function openSettings() {
+  const S = state.set;
+  if (!S.loaded && !S.loading) {
+    S.loading = true; renderSettings();
+    try { await loadSettingsData(); } catch (e) { S.err = e.message || 'Could not load settings.'; }
+    S.loading = false;
+  }
+  renderSettings();
+}
+// After any change: reload the lists the rest of the app uses, so People, the filters, the gate and the Dashboard see it at once.
+async function reloadAll() {
+  const [stages, fields, team, tags] = await Promise.all([api.stages(), api.fields(), api.team(), api.tags()]);
+  state.stages = stages; state.stageMap = new Map(stages.map(s => [s.id, s])); state.fields = fields; setTeam(team); state.tags = (tags || []).map(t => t.name);
+  await loadSettingsData();
+  renderFilters(); renderList(); renderPanel(); renderChromeBits();
+}
+function renderChromeBits() { if (state.me) { const m = state.team.find(x => x.id === state.me.id); if (m) state.me.role = m.role; renewChrome(); } }
+async function sWrite(fn) {
+  const S = state.set; if (S.busy) return false;
+  S.busy = true; renderSettings();
+  let ok = true;
+  try { await fn(); await reloadAll(); } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
+  S.busy = false; renderSettings(); return ok;
+}
+const sdis = () => state.set.busy ? 'disabled' : '';
+const switchBox = (attr, id, on, label, disabled, title) => `<label class="contacted" ${title ? `title="${esc(title)}"` : ''}><input type="checkbox" ${attr}="${esc(id)}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : sdis()}>${esc(label)}</label>`;
+const subHead = (title, desc) => `<div class="subhead row"><button class="btn small" data-setpage="">‹ Settings</button><h2 style="margin:0">${esc(title)}</h2></div><p class="sub" style="margin:8px 0 12px">${desc}</p>`;
+const usedBy = (n) => `Used by ${n.toLocaleString('en-US')} lead${n === 1 ? '' : 's'}`;
+const sorted = (a) => a.slice().sort((x, y) => x.sort_order - y.sort_order);
+function optUsed(f, o) { let n = 0; for (const p of all) { const v = (p.custom || {})[f.key]; if (f.type === 'multiselect' ? Array.isArray(v) && v.includes(o) : v === o) n++; } return n; }
+const tagUsed = (t) => { let n = 0; for (const p of all) if ((p.tags || []).includes(t)) n++; return n; };
+const peopleReady = () => !state.loading && !state.loadFailed;
+
+function pageStages(S) {
+  const rows = sorted(S.stages);
+  return subHead('Stages', 'Change the order, or choose which stages close a lead. Add a new stage at the end.')
+    + `<p class="sub" id="stageLock" style="margin:0 0 12px">🔒 Stage names are locked while Follow Up Boss is still in use. The nightly sync matches stages by name.</p>
+    <div class="section" id="stageList">${rows.map((s, i) => `<div class="slrow" draggable="${S.busy || !s.active ? 'false' : 'true'}" data-dnd="stage" data-i="${i}" data-stage-row="${s.id}"><span class="grip" aria-hidden="true">⋮⋮</span>
+      <span class="arrows"><button data-smove="stage" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : sdis()} aria-label="Move ${esc(s.name)} up">▲</button><button data-smove="stage" data-i="${i}" data-d="1" ${i === rows.length - 1 ? 'disabled' : sdis()} aria-label="Move ${esc(s.name)} down">▼</button></span>
+      <span class="slpinned">🔒 <b class="stname">${esc(s.name)}</b>${s.active ? '' : ' <span class="pill warn">archived</span>'}${s.is_nonworkable ? ' <span class="pill bad">Non-workable</span>' : ''}</span>
+      ${switchBox('data-stclose', s.id, s.is_nonworkable || s.closes_lead, 'Closes the lead', s.is_nonworkable, s.is_nonworkable ? 'Non-workable always closes the lead' : '')}</div>`).join('')}</div>
+    <div class="section"><h4>Add a stage</h4><div class="row"><input class="slname" id="newStage" placeholder="Stage name" aria-label="New stage name" ${sdis()}><button class="btn primary" id="addStage" ${sdis()}>+ Add stage</button></div><div class="err" id="setErr"></div></div>`;
+}
+function pageFields(S) {
+  const rows = sorted(S.fields);
+  const head = subHead('Custom fields', 'Change labels, order, and which fields are required before Non-workable. A field\'s type and FUB link can not change.');
+  const opts = (f) => (f.type === 'dropdown' || f.type === 'multiselect') ? `<div class="chips" style="margin-top:6px">${(f.options || []).map((o, oi) => S.edit === `opt:${f.key}:${oi}`
+      ? `<span class="editbox" style="display:inline-flex;gap:6px"><input id="sOpt" value="${esc(o)}" aria-label="Option name"><button class="btn small primary" data-optsave ${sdis()}>Save</button><button class="btn small" data-setcancel>Cancel</button></span>`
+      : `<span class="chip" data-opt-chip>${esc(o)} <span class="sub">${esc(usedBy(optUsed(f, o)))}</span> <button class="pen" data-optren="${esc(f.key)}|${oi}" aria-label="Rename ${esc(o)}" ${sdis()} style="opacity:1">${penSvg}</button><button class="pen" data-optdel="${esc(f.key)}|${oi}" aria-label="Remove ${esc(o)}" ${sdis()} style="opacity:1">×</button></span>`).join('')}
+      <span class="row"><input class="slname" data-newopt="${esc(f.key)}" placeholder="New option" aria-label="New option for ${esc(f.label)}" ${sdis()}><button class="btn small" data-addopt="${esc(f.key)}" ${sdis()}>Add option</button></span></div>` : '';
+  return head + `<div class="section" id="fieldList">${rows.map((f, i) => `<div class="slrow" draggable="${S.busy ? 'false' : 'true'}" data-dnd="field" data-i="${i}" data-field-row="${esc(f.key)}" style="display:block"><div class="row"><span class="grip" aria-hidden="true">⋮⋮</span>
+      <span class="arrows"><button data-smove="field" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : sdis()} aria-label="Move ${esc(f.label)} up">▲</button><button data-smove="field" data-i="${i}" data-d="1" ${i === rows.length - 1 ? 'disabled' : sdis()} aria-label="Move ${esc(f.label)} down">▼</button></span>
+      ${S.edit === 'label:' + f.key ? `<input class="slname" id="sLabel" value="${esc(f.label)}" aria-label="Field label"><button class="btn small primary" data-labelsave ${sdis()}>Save</button><button class="btn small" data-setcancel>Cancel</button>` : `<b class="flabel">${esc(f.label)}</b><button class="pen" data-labeledit="${esc(f.key)}" aria-label="Edit label" ${sdis()} style="opacity:1">${penSvg}</button>`}
+      <span class="sub ftype">${esc((FIELD_TYPES.find(t => t[0] === f.type) || [0, f.type])[1])}</span>${f.active === false ? ' <span class="pill warn">archived</span>' : ''}
+      ${switchBox('data-freq', f.key, f.required_for_nonworkable, 'Required for Non-workable')}${switchBox('data-fhide', f.key, f.hidden, 'Hidden')}</div>${opts(f)}</div>`).join('')}</div>
+    <div class="section"><h4>Add a field</h4><div class="fields">
+      <div class="field"><label>Label</label><input id="nfLabel" aria-label="New field label" ${sdis()}></div>
+      <div class="field"><label>Type</label><select id="nfType" aria-label="New field type" ${sdis()}>${FIELD_TYPES.map(t => `<option value="${t[0]}">${t[1]}</option>`).join('')}</select></div>
+      <div class="field" style="grid-column:1/-1"><label>Options (for dropdown and multiple choice: one per line)</label><textarea id="nfOpts" aria-label="Options" ${sdis()}></textarea></div></div>
+      <div class="row" style="margin-top:8px">${switchBox('id="nfReq" data-x', 'nfReq', false, 'Required for Non-workable')}<span class="spacer"></span><button class="btn primary" id="addField" ${sdis()}>+ Add field</button></div><div class="err" id="setErr"></div></div>`;
+}
+function pageTags(S) {
+  return subHead('Tags', 'Tags are free text on a lead. A tag can be deleted only when no lead uses it.')
+    + `<div class="section"><div class="row">${switchBox('data-agentstags', 'x', S.agentsTags, 'Agents can create new tags')}</div></div>
+    <div class="section" id="tagList2">${S.tags.map(t => { const n = tagUsed(t); return `<div class="slrow" data-tag-row="${esc(t)}"><span class="slpinned"><span class="tag">${esc(t)}</span></span><span class="sub">${esc(usedBy(n))}</span><button class="btn small" data-tagdel="${esc(t)}" ${sdis()}>Delete</button></div>`; }).join('') || '<div class="empty-s">No tags yet.</div>'}</div>
+    <div class="section"><h4>Add a tag</h4><div class="row"><input class="slname" id="newTag" placeholder="Tag name" aria-label="New tag name" ${sdis()}><button class="btn primary" id="addTag2" ${sdis()}>+ Add tag</button></div><div class="err" id="setErr"></div></div>`;
+}
+function pageTeam(S) {
+  const mem = (m) => `<div class="section" data-member="${esc(m.id)}"><div class="row"><span class="who">${avatar(m.id, 'sm')}<div style="min-width:0"><div class="name">${esc(m.full_name)}${m.active ? '' : ' <span class="pill warn">not active</span>'}</div><div class="sub">${esc(m.role)} · ${esc(m.email || '')}</div><div class="sub">${m.lead_gmail ? 'Lead Gmail: ' + esc(m.lead_gmail) : 'No lead Gmail'}${m.phone ? ' · ' + esc(m.phone) : ''}</div></div></span><span class="spacer"></span>
+    ${switchBox('data-mactive', m.id, m.active, 'Active')}${switchBox('data-msign', m.id, m.can_sign_in, 'Can sign in')}${switchBox('data-mexp', m.id, m.can_export || m.role === 'manager', 'Can export', m.role === 'manager', m.role === 'manager' ? 'Managers can always export' : '')}
+    <button class="btn small" data-medit="${esc(m.id)}" ${sdis()}>Edit</button></div>
+    ${S.edit === 'member:' + m.id ? `<div class="editbox" style="margin-top:8px"><div class="fields"><div class="field"><label>Full name</label><input id="mName" value="${esc(m.full_name)}"></div>
+      <div class="field"><label>Role</label><select id="mRole"><option value="agent" ${m.role === 'agent' ? 'selected' : ''}>Agent</option><option value="manager" ${m.role === 'manager' ? 'selected' : ''}>Manager</option></select></div>
+      <div class="field"><label>Sign-in email</label><input id="mEmail" type="email" value="${esc(m.email || '')}" ${m.id === state.me.id ? 'readonly' : ''}>${m.id === state.me.id ? `<div class="hint sub" id="selfMailNote">${SELF_MAIL_NOTE}</div>` : ''}</div>
+      <div class="field"><label>Lead Gmail</label><input id="mGmail" type="email" value="${esc(m.lead_gmail || '')}"></div>
+      <div class="field"><label>Phone</label><input id="mPhone" value="${esc(m.phone || '')}"></div></div>
+      <div class="err" id="setErr"></div><div class="row" style="justify-content:flex-end"><button class="btn small" data-setcancel>Cancel</button><button class="btn small primary" data-membersave ${sdis()}>Save</button></div></div>` : ''}</div>`;
+  return subHead('Team', 'Removing a member means turning Active off. Old notes keep their name.') + S.team.slice().sort((a, b) => a.full_name.localeCompare(b.full_name)).map(mem).join('')
+    + `<div class="section"><h4>Add a member</h4><div class="fields"><div class="field"><label>Full name</label><input id="nmName" aria-label="New member name"></div>
+      <div class="field"><label>Sign-in email</label><input id="nmEmail" type="email" aria-label="New member email"></div>
+      <div class="field"><label>Role</label><select id="nmRole" aria-label="New member role"><option value="agent">Agent</option><option value="manager">Manager</option></select></div>
+      <div class="field"><label>Lead Gmail</label><input id="nmGmail" type="email" aria-label="New member lead Gmail"></div>
+      <div class="field"><label>Phone</label><input id="nmPhone" aria-label="New member phone"></div></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" id="addMember" ${sdis()}>+ Add member</button></div><div class="err" id="setErr"></div></div>`;
+}
+function pageAbout() {
+  return subHead('About', 'The plain facts.') + `<div class="section" id="aboutBox"><div class="dvals"><span class="dlabel">Version</span><span class="dval" id="aboutVersion">${esc(APP_VERSION)}</span><span></span></div>
+    <div class="dvals"><span class="dlabel">Supabase plan</span><span class="dval">${esc(SUPABASE_PLAN)}</span><span></span></div>
+    <div class="dvals"><span class="dlabel">Data</span><span class="dval">Data syncs from Follow Up Boss every night at 2:30 AM.</span><span></span></div></div>`;
+}
+function renderSettings() {
+  const el = $('#settingsBody'), S = state.set;
+  if (!isMgr()) return;
+  const keepFocus = document.activeElement && document.activeElement.id;
+  let html;
+  if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
+  else if (!S.loaded) html = '<div class="loading-s">Loading…</div>';
+  else if (!S.page) html = `<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">${SET_PAGES.map(([k, t]) => `<button class="tile" data-setpage="${k}"><span class="k">${t}</span><span class="v">${{ stages: S.stages.length, fields: S.fields.length, tags: S.tags.length, team: S.team.length, about: 'v' + APP_VERSION }[k]}</span><span class="s">${{ stages: 'order, closes the lead', fields: 'labels, order, options', tags: 'who can create tags', team: 'who can sign in', about: 'version and sync' }[k]}</span></button>`).join('')}</div>`;
+  else html = { stages: pageStages, fields: pageFields, tags: pageTags, team: pageTeam, about: pageAbout }[S.page](S);
+  const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
+  el.innerHTML = html;
+  for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm)/.test(id)) x.value = v; }
+  if (keepFocus && el.querySelector('#' + CSS.escape(keepFocus))) el.querySelector('#' + CSS.escape(keepFocus)).focus();
+}
+function setErr(m) { const e = $('#setErr'); if (e) e.textContent = m; }
+const slug = (label, taken) => {
+  let k = String(label).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (!/^[a-z]/.test(k)) k = 'f_' + k; if (k === 'f_') k = 'field';
+  let out = k, n = 2; while (taken.has(out)) out = k + '_' + n++;
+  return out;
+};
+// Reorder: write sort_order for every row that moved (one update per changed row, one at a time).
+async function reorder(kind, from, to) {
+  const S = state.set; if (to < 0 || to >= (kind === 'stage' ? S.stages : S.fields).length || from === to) return;
+  const rows = sorted(kind === 'stage' ? S.stages : S.fields), [m] = rows.splice(from, 1); rows.splice(to, 0, m);
+  await sWrite(async () => {
+    for (let i = 0; i < rows.length; i++) {
+      const want = (i + 1) * 10, r = rows[i]; if (r.sort_order === want) continue;
+      if (kind === 'stage') await api.updateStage(r.id, { sort_order: want }); else await api.updateField(r.key, { sort_order: want });
+    }
+  });
+}
+const wouldLoseLastManager = (m, patch) => {
+  const ok = (x) => x.role === 'manager' && x.active && x.can_sign_in;
+  const others = state.set.team.filter(x => x.id !== m.id && ok(x));
+  return ok(m) && !ok({ ...m, ...patch }) && others.length === 0;
+};
+const SELF_MAIL_NOTE = 'To change your own sign-in email, ask Claude or Greg.';
+const LAST_MGR = 'LoopIn needs at least one active manager who can sign in.';
+async function setMember(m, patch) {
+  if (wouldLoseLastManager(m, patch)) { toast(LAST_MGR); renderSettings(); return; }
+  await sWrite(() => api.updateMember(m.id, patch));
+}
+
+$('#settingsBody').addEventListener('click', async e => {
+  const t = e.target, S = state.set, el = (sel) => t.closest(sel);
+  if (el('#setRetry')) { S.err = ''; S.loaded = false; openSettings(); return; }
+  const sp = el('[data-setpage]'); if (sp) { S.page = sp.dataset.setpage || null; S.edit = null; renderSettings(); return; }
+  if (el('[data-setcancel]')) { S.edit = null; renderSettings(); return; }
+  const mv = el('[data-smove]'); if (mv) { if (!mv.disabled) reorder(mv.dataset.smove, +mv.dataset.i, +mv.dataset.i + +mv.dataset.d); return; }
+  if (el('#addStage')) {
+    const name = $('#newStage').value.trim();
+    if (!name) return setErr('Type a stage name.');
+    if (S.stages.some(s => ciEq(s.name, name))) return setErr('A stage with that name already exists.');
+    const max = Math.max(0, ...S.stages.map(s => s.sort_order));
+    if (await sWrite(() => api.addStage({ name, sort_order: max + 10, closes_lead: false, active: true }))) { const i = $('#newStage'); if (i) i.value = ''; }
+    return;
+  }
+  const le = el('[data-labeledit]'); if (le) { S.edit = 'label:' + le.dataset.labeledit; renderSettings(); const i = $('#sLabel'); if (i) i.focus(); return; }
+  if (el('[data-labelsave]')) {
+    const key = S.edit.slice(6), v = $('#sLabel').value.trim(); if (!v) { toast('A field needs a label.'); return; }
+    if (await sWrite(() => api.updateField(key, { label: v }))) { S.edit = null; renderSettings(); } return;
+  }
+  const ren = el('[data-optren]'); if (ren) {
+    const [key, i] = ren.dataset.optren.split('|'), f = S.fields.find(x => x.key === key), o = f.options[+i];
+    if (!peopleReady()) { toast('Wait until all people have loaded, then try again.'); return; }
+    const n = optUsed(f, o); if (n) { toast(`Used by ${n.toLocaleString('en-US')} lead${n === 1 ? '' : 's'}. An option that leads use can not be renamed.`); return; }
+    S.edit = `opt:${key}:${i}`; renderSettings(); const inp = $('#sOpt'); if (inp) inp.focus(); return;
+  }
+  if (el('[data-optsave]')) {
+    const [, key, i] = S.edit.split(':'), f = S.fields.find(x => x.key === key), v = $('#sOpt').value.trim();
+    if (!v) { toast('An option needs a name.'); return; }
+    if (f.options.some((o, oi) => oi !== +i && ciEq(o, v))) { toast('That option already exists.'); return; }
+    const opts = f.options.map((o, oi) => oi === +i ? v : o);
+    if (await sWrite(() => api.updateField(key, { options: opts }))) { S.edit = null; renderSettings(); } return;
+  }
+  const od = el('[data-optdel]'); if (od) {
+    const [key, i] = od.dataset.optdel.split('|'), f = S.fields.find(x => x.key === key), o = f.options[+i];
+    if (!peopleReady()) { toast('Wait until all people have loaded, then try again.'); return; }
+    const n = optUsed(f, o); if (n) { toast(`Used by ${n.toLocaleString('en-US')} lead${n === 1 ? '' : 's'}. An option that leads use can not be removed.`); return; }
+    await sWrite(() => api.updateField(key, { options: f.options.filter((_, oi) => oi !== +i) })); return;
+  }
+  const ao = el('[data-addopt]'); if (ao) {
+    const key = ao.dataset.addopt, f = S.fields.find(x => x.key === key), inp = t.closest('.row').querySelector('[data-newopt]'), v = inp.value.trim();
+    if (!v) return; if (f.options.some(o => ciEq(o, v))) { toast('That option already exists.'); return; }
+    await sWrite(() => api.updateField(key, { options: [...f.options, v] })); return;
+  }
+  if (el('#addField')) {
+    const label = $('#nfLabel').value.trim(), type = $('#nfType').value, need = type === 'dropdown' || type === 'multiselect';
+    const options = need ? $('#nfOpts').value.split('\n').map(x => x.trim()).filter(Boolean) : [];
+    if (!label) return setErr('A field needs a label.');
+    if (S.fields.some(f => ciEq(f.label, label))) return setErr('A field with that label already exists.');
+    if (need && !options.length) return setErr('Add at least one option.');
+    const key = slug(label, new Set(S.fields.map(f => f.key))), max = Math.max(0, ...S.fields.map(f => f.sort_order));
+    const row = { key, label, type, options, sort_order: max + 10, required_for_nonworkable: $('#nfReq').checked, active: true, hidden: false };
+    if (await sWrite(() => api.addField(row))) { ['#nfLabel', '#nfOpts'].forEach(i => { const x = $(i); if (x) x.value = ''; }); }
+    return;
+  }
+  if (el('#addTag2')) {
+    const name = $('#newTag').value.trim();
+    if (!name) return setErr('Type a tag name.');
+    if (S.tags.some(x => ciEq(x, name))) return setErr('That tag already exists.');
+    if (await sWrite(() => api.addTagName(name))) { const i = $('#newTag'); if (i) i.value = ''; }
+    return;
+  }
+  const td = el('[data-tagdel]'); if (td) {
+    const name = td.dataset.tagdel;
+    if (!peopleReady()) { toast('Wait until all people have loaded, then try again.'); return; }
+    const n = tagUsed(name); if (n) { toast(`Used by ${n.toLocaleString('en-US')} lead${n === 1 ? '' : 's'}. A tag that leads use can not be deleted.`); return; }
+    await sWrite(() => api.deleteTag(name)); return;
+  }
+  const me_ = el('[data-medit]'); if (me_) { S.edit = 'member:' + me_.dataset.medit; renderSettings(); const i = $('#mName'); if (i) i.focus(); return; }
+  if (el('[data-membersave]')) {
+    const m = S.team.find(x => 'member:' + x.id === S.edit); if (!m) return;
+    const name = $('#mName').value.trim(), role = $('#mRole').value, email = $('#mEmail').value.trim().toLowerCase(), gmail = $('#mGmail').value.trim().toLowerCase(), phone = $('#mPhone').value.trim();
+    if (!name) return setErr('A member needs a name.');
+    if (!EMAIL_OK.test(email)) return setErr('Enter a sign-in email like name@example.com.');
+    if (gmail && !EMAIL_OK.test(gmail)) return setErr('The lead Gmail does not look like an email address.');
+    if (S.team.some(x => x.id !== m.id && ciEq(x.email, email))) return setErr('That email is already on the team.');
+    const patch = { full_name: name, role, lead_gmail: gmail || null, phone: phone || null };
+    if (wouldLoseLastManager(m, { role })) return setErr(LAST_MGR);
+    const emailChanged = !ciEq(m.email || '', email);
+    if (emailChanged && m.id === state.me.id) return setErr(SELF_MAIL_NOTE);   // it would clear the only manager's auth_user_id
+    const go = async () => { const p = emailChanged ? { ...patch, email, auth_user_id: null } : patch; if (await sWrite(() => api.updateMember(m.id, p))) { S.edit = null; renderSettings(); } };
+    if (emailChanged) {
+      showModal(`<h3 id="mailWarn">They will need to sign in again with the new email.</h3><p style="margin:0;color:var(--ink-2)">${esc(name)}'s sign-in email changes to ${esc(email)}.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="mailGo">Change email</button></div>`);
+      $('#mailGo').onclick = () => { closeModal(); go(); };
+    } else go();
+    return;
+  }
+  if (el('#addMember')) {
+    const name = $('#nmName').value.trim(), email = $('#nmEmail').value.trim().toLowerCase(), role = $('#nmRole').value, gmail = $('#nmGmail').value.trim().toLowerCase(), phone = $('#nmPhone').value.trim();
+    if (!name) return setErr('A member needs a name.');
+    if (!EMAIL_OK.test(email)) return setErr('Enter a sign-in email like name@example.com.');
+    if (gmail && !EMAIL_OK.test(gmail)) return setErr('The lead Gmail does not look like an email address.');
+    if (S.team.some(x => ciEq(x.email, email))) return setErr('That email is already on the team.');
+    if (await sWrite(() => api.addMember({ full_name: name, email, role, lead_gmail: gmail || null, phone: phone || null, can_sign_in: false, active: true }))) ['#nmName', '#nmEmail', '#nmGmail', '#nmPhone'].forEach(i => { const x = $(i); if (x) x.value = ''; });
+  }
+});
+$('#settingsBody').addEventListener('change', async e => {
+  const t = e.target, S = state.set;
+  if (t.dataset.stclose != null) {
+    const s = S.stages.find(x => String(x.id) === t.dataset.stclose); if (!s || s.is_nonworkable) { renderSettings(); return; }
+    await sWrite(() => api.updateStage(s.id, { closes_lead: t.checked })); return;
+  }
+  if (t.dataset.freq != null) { await sWrite(() => api.updateField(t.dataset.freq, { required_for_nonworkable: t.checked })); return; }
+  if (t.dataset.fhide != null) { await sWrite(() => api.updateField(t.dataset.fhide, { hidden: t.checked })); return; }
+  if (t.dataset.agentstags != null) { await sWrite(() => api.setAgentsTags(t.checked)); return; }
+  const m = S.team.find(x => String(x.id) === (t.dataset.mactive || t.dataset.msign || t.dataset.mexp));
+  if (!m) return;
+  if (t.dataset.mactive != null) return setMember(m, { active: t.checked });
+  if (t.dataset.mexp != null) return setMember(m, { can_export: t.checked });
+  if (t.dataset.msign != null) {
+    if (t.checked && m.role === 'agent') {
+      t.checked = false;
+      showModal(`<h3 id="signText">${esc(m.full_name)} will be able to sign in, and their leads become editable in LoopIn. A lead edited in LoopIn stops getting updates from Follow Up Boss. Turn on?</h3><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="signGo">Turn on</button></div>`);
+      $('#signGo').onclick = () => { closeModal(); setMember(m, { can_sign_in: true }); };
+      return;
+    }
+    setMember(m, { can_sign_in: t.checked });
+  }
+});
+// Drag to reorder (the arrows do the same thing)
+let dndFrom = null;
+$('#settingsBody').addEventListener('dragstart', e => { const r = e.target.closest('[data-dnd]'); if (!r) return; dndFrom = { kind: r.dataset.dnd, i: +r.dataset.i }; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); } catch (_) {} });
+$('#settingsBody').addEventListener('dragover', e => { if (dndFrom && e.target.closest('[data-dnd]')) e.preventDefault(); });
+$('#settingsBody').addEventListener('drop', e => { const r = e.target.closest('[data-dnd]'); if (!r || !dndFrom || r.dataset.dnd !== dndFrom.kind) return; e.preventDefault(); const f = dndFrom; dndFrom = null; reorder(f.kind, f.i, +r.dataset.i); });
 
 // ───────── Start ─────────
 (async function init() {
