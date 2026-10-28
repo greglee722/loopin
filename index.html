@@ -634,6 +634,12 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 @media (min-width: 861px) { #view-people table { min-width: 1060px; } }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
+.tiles.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .tiles.five { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 860px) { .tiles.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.renew-note { margin: 0 0 12px; color: var(--ink-2); max-width: 70ch; }
+#view-renew .card { margin-bottom: 16px; } #view-renew .toolbar { margin-bottom: 14px; }
+#view-renew td .row { flex-wrap: wrap; }
 .note .meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; } .note .meta .spacer { flex: 1; }
 .tagrow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .vrow:hover .pen { opacity: 1; } .note:hover .pen, .dvals:hover .pen { opacity: 1; }
@@ -667,7 +673,8 @@ th.num-col button { white-space: nowrap; }
   .sm-only { display: inline; }
 }
 @media (max-width: 600px) {
-  .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nav { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  #view-renew td { white-space: normal; } #view-renew th { white-space: normal; }
   .bulkbar { top: 58px; }
   .me .nm { display: none; }
   .toolbar select.btn { flex: 1 1 130px; min-width: 0; }
@@ -685,6 +692,7 @@ th.num-col button { white-space: nowrap; }
   <nav class="nav" id="nav" aria-label="Main" hidden>
     <button data-view="dash" aria-current="page">Dashboard</button>
     <button data-view="people">People</button>
+    <button data-view="renewals" id="navRenew" hidden>Renewals<span class="count" id="renewCount"></span></button>
   </nav>
   <input class="topsearch" id="search" type="search" placeholder="Name, email or phone" aria-label="Search people" autocomplete="off" hidden>
   <div class="spacer"></div>
@@ -695,6 +703,11 @@ th.num-col button { white-space: nowrap; }
   <section id="view-auth" hidden></section>
 
   <section class="view" id="view-dash" hidden><div id="dash"></div></section>
+
+  <section class="view" id="view-renew" hidden>
+    <div class="listhead"><h1>Renewals</h1></div>
+    <div id="renewBody"></div>
+  </section>
 
   <section class="view" id="view-people" hidden>
     <div class="listhead"><h1>People</h1></div>
@@ -814,6 +827,11 @@ function makeApi(url, key) {
     async deleteNote(id) { gone(await sb.from('notes').delete().eq('id', id).select('id')); },
     async tags() { return ok(await sb.from('tags').select('name').order('name')); },
     async settings() { return ok(await sb.from('team_settings').select('agents_create_tags').eq('id', 1).maybeSingle()); },
+    async listings() {
+      return ok(await sb.from('zillow_listings').select('id,zillow_account,property_id,listing_address,status,expires_on,last_notice_at,last_notice_kind,notices,dismissed_at,dismissed_reason,dismissed_by,created_at').order('expires_on', { nullsFirst: false }));
+    },
+    async dismissListing(id, reason) { ok(await sb.rpc('pl_dismiss_listing', { p_id: id, p_reason: reason })); },
+    async undismissListing(id) { ok(await sb.rpc('pl_undismiss_listing', { p_id: id })); },
     async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
@@ -890,6 +908,7 @@ const state = {
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
   sel: new Set(), onlyIds: null, bulk: null, list: [], shownIds: [],
   edit: null, lastEdit: null, tags: [], agentTags: false,
+  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
   view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
@@ -950,7 +969,7 @@ document.addEventListener('keydown', e => {
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
   $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
-  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; }
+  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#navRenew').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
@@ -984,6 +1003,7 @@ function resetApp() {
   Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
+    rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
   inqCache.clear(); state.sel.clear();
   $('#search').value = '';
@@ -1012,9 +1032,9 @@ async function start(session) {
     state.fields = fields;
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   state.loading = true;
-  state.view = location.hash === '#people' ? 'people' : 'dash';
+  state.view = location.hash === '#people' ? 'people' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : 'dash';
   renderMe(); renderFilters(); setChrome(true);
-  loadPeople(myGen); loadAppts(); loadHits();
+  loadPeople(myGen); loadAppts(); loadHits(); loadListings();
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
   api.settings().then(r => { if (myGen === loadGen) state.agentTags = !!(r && r.agents_create_tags); }).catch(() => {});
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
@@ -1196,6 +1216,7 @@ function rowHtml(p) {
 function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
+  if (state.view === 'renewals') return;
   syncZFilter();
   const list = filtered(), n = list.length;
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
@@ -1523,7 +1544,7 @@ function route() {
   const h = location.hash, m = /^#p\/([0-9a-f-]{36})$/i.exec(h);
   if (m && UUID.test(m[1])) { showPanel(m[1].toLowerCase()); return; }
   if (state.open) hidePanel();
-  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : state.view;
+  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : state.view;
   applyView();
 }
 function go(view) {
@@ -1534,10 +1555,14 @@ function go(view) {
 }
 function applyView() {
   if (!state.me) return;
-  const dash = state.view === 'dash';
-  $('#view-dash').hidden = !dash; $('#view-people').hidden = dash;
-  document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === state.view ? 'page' : 'false'));
-  if (dash) { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); } else renderList();
+  if (state.view === 'renewals' && !(state.me.role === 'manager' && state.rOn)) state.view = 'dash';
+  const v = state.view;
+  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals';
+  document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
+  renewChrome();
+  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); }
+  else if (v === 'renewals') { if (Date.now() - state.renew.at > 300000) loadListings(); renderRenew(); }
+  else renderList();
 }
 window.addEventListener('hashchange', route);
 function openPanel(id) {
@@ -1870,11 +1895,12 @@ function renderDash() {
   const tile = (k, v, sub, go, cls = '') => go
     ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></button>`
     : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
-  const tiles = `<div class="tiles">
+  const tiles = `<div class="tiles ${state.rOn && state.me.role === 'manager' ? 'five' : ''}">
     ${tile('Team new leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
     ${tile('Team not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
     ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
+    ${state.rOn && state.me.role === 'manager' ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'expiring in 7 days or expired', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
   </div>`;
 
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
@@ -1978,6 +2004,7 @@ $('#dash').addEventListener('click', e => {
   const g = t.closest('[data-go]');
   if (g) {
     const k = g.dataset.go;
+    if (k === 'renew') { go('renewals'); return; }
     if (k === 'look') { const el = $('#dash-look'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     else peopleWith({ unc: k === 'unc' });
     return;
@@ -1988,6 +2015,97 @@ $('#dash').addEventListener('click', e => {
   if (o) { e.preventDefault(); openPanel(o.dataset.openlead); }
 });
 $('#dash').addEventListener('change', onChange);
+
+// ───────── Renewals (Step 1: read-only; nothing here changes anything in Zillow) ─────────
+// The list comes from zillow_listings (managers only). If that table does not exist yet, the tab and the tile stay hidden.
+const isMissingTable = (e) => !!e && (e.code === 'PGRST205' || e.code === '42P01' || /zillow_listings/i.test(e.message || ''));
+const rNeeds = (l) => !l.dismissed_at && (l.status === 'expired' || (l.status === 'expiring' && l.expires_on && daysFromToday(dateOnly(l.expires_on)) <= 7));
+const renewCount = () => state.renew.list.filter(rNeeds).length;
+const zillowUrl = (id) => /^[A-Za-z0-9_-]+$/.test(String(id || '')) ? `https://www.zillow.com/rental-manager/properties/${encodeURIComponent(id)}/listing` : '';   // built from the id, never a signed link
+function renewChrome() {
+  const on = state.me && state.me.role === 'manager' && state.rOn;
+  $('#navRenew').hidden = !on;
+  const n = on && state.renew.loaded ? renewCount() : 0;
+  $('#renewCount').textContent = n || '';
+}
+async function loadListings() {
+  if (!state.me || state.me.role !== 'manager' || !state.rOn || state.renew.busyLoad) return;
+  const gen = loadGen; state.renew.busyLoad = true;
+  try {
+    const rows = await api.listings();
+    if (gen !== loadGen) return;
+    state.renew.list = rows || []; state.renew.loaded = true; state.renew.err = ''; state.renew.at = Date.now();
+  } catch (e) {
+    if (gen !== loadGen) return;
+    if (isMissingTable(e)) {
+      state.rOn = false;   // 09 has not run yet: hide the tab and the tile, no error
+      if (state.view === 'renewals') { state.view = 'dash'; try { history.replaceState(null, '', location.href.split('#')[0] + '#dash'); } catch (_) {} applyView(); }
+    } else state.renew.err = e.message || 'Could not load listings.';
+  } finally { if (gen === loadGen) { state.renew.busyLoad = false; renewChrome(); if (state.view === 'renewals') renderRenew(); else if (state.view === 'dash') renderDash(); } }
+}
+function renderRenew() {
+  const R = state.renew, el = $('#renewBody');
+  if (!state.me) return;
+  const accts = [...new Set(R.list.map(l => l.zillow_account).filter(Boolean))].sort();
+  const keep = R.acct && accts.includes(R.acct) ? R.acct : '';
+  const inAcct = (l) => !keep || l.zillow_account === keep;
+  const live = R.list.filter(l => !l.dismissed_at && inAcct(l));
+  const expiring = live.filter(l => l.status === 'expiring').sort((a, b) => String(a.expires_on || '9999').localeCompare(String(b.expires_on || '9999')));
+  const expired = live.filter(l => l.status === 'expired').sort((a, b) => String(b.expires_on || b.last_notice_at || '').localeCompare(String(a.expires_on || a.last_notice_at || '')));
+  const dismissed = R.showDismissed ? R.list.filter(l => l.dismissed_at && inAcct(l)).sort((a, b) => String(b.dismissed_at).localeCompare(String(a.dismissed_at))) : [];
+  const notice = (l) => l.last_notice_at ? esc(fmtShort(l.last_notice_at)) : '—';
+  const acct = (l) => `<span title="${esc(l.zillow_account)}">${esc(zLocal(l.zillow_account))}</span>`;
+  const addr = (l) => `<div class="name">${esc(l.listing_address || 'Unknown address')}</div>`;
+  const open = (l) => { const u = zillowUrl(l.property_id); return u ? `<a class="btn small" href="${esc(u)}" target="_blank" rel="noopener">Open in Zillow</a>` : ''; };
+  const dis = (l) => R.busy.has(l.id) ? 'disabled' : '';
+  const acts = (l) => `<div class="row">${open(l)}<button class="btn small" data-renewed="${esc(l.id)}" ${dis(l)}>Renewed</button><button class="btn small" data-rented="${esc(l.id)}" ${dis(l)}>Rented</button></div>`;
+  const pill = (days) => `<span class="pill ${days <= 3 ? 'bad' : days <= 7 ? 'warn' : 'info'} num">${days <= 0 ? (days === 0 ? 'today' : `${-days} days late`) : `${days} day${days === 1 ? '' : 's'}`}</span>`;
+  const head = (cols) => `<thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
+  const sec = (title, id, body) => `<section class="card" id="${id}"><h2>${title}</h2><div class="tablewrap" style="border:0;border-radius:0">${body}</div></section>`;
+  const expTable = expiring.length ? `<table>${head(['Listing', 'Account', 'Expires', 'Last notice', ''])}<tbody>${expiring.map(l => {
+    const d = l.expires_on ? dateOnly(l.expires_on) : null, days = d ? daysFromToday(d) : null;
+    return `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>${d ? `expires ${esc(fmtMonthDay(d))} ${pill(days)}` : '<span class="sub">no date</span>'}</td><td class="sub">${notice(l)}</td><td>${acts(l)}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty-s">None.</div>';
+  const expdTable = expired.length ? `<table>${head(['Listing', 'Account', 'Expired', 'Last notice', ''])}<tbody>${expired.map(l => {
+    const d = l.expires_on ? dateOnly(l.expires_on) : null;
+    return `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>expired since ${esc(d ? fmtMonthDay(d) : l.last_notice_at ? fmtMonthDay(new Date(l.last_notice_at)) : '—')}</td><td class="sub">${notice(l)}</td><td>${acts(l)}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty-s">None.</div>';
+  const disTable = `<table>${head(['Listing', 'Account', 'Dismissed', '', ''])}<tbody>${dismissed.map(l => `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>${esc(l.dismissed_reason || 'other')} · ${esc(memberName(l.dismissed_by) || 'a team member')} · ${esc(fmtShort(l.dismissed_at))}</td><td></td><td><div class="row">${open(l)}<button class="btn small" data-undo="${esc(l.id)}" ${dis(l)}>Undo</button></div></td></tr>`).join('')}</tbody></table>`;
+  const nothing = !expiring.length && !expired.length && !dismissed.length;
+  el.innerHTML = `<p class="renew-note" id="renewNote">LoopIn lists the listings Zillow emailed about. It does not change anything in Zillow. Mark a listing Renewed after you confirm it in Zillow, or Rented to hide it.</p>
+    <div class="toolbar"><select class="btn" id="rAcct" aria-label="Zillow account"><option value="">All accounts</option>${accts.map(a => `<option value="${esc(a)}" ${a === keep ? 'selected' : ''} title="${esc(a)}">${esc(zLocal(a))}</option>`).join('')}</select>
+      <label class="contacted"><input type="checkbox" id="rShowDis" ${R.showDismissed ? 'checked' : ''}>Show dismissed</label></div>
+    ${R.err ? `<div class="empty-s" id="renewErr">${esc(R.err)} <button class="btn small" id="renewRetry">Try again</button></div>` : !R.loaded ? '<div class="loading-s">Loading…</div>' : nothing ? '<div class="empty-s" id="renewEmpty">No listings need attention.</div>' : ''}
+    ${R.loaded && !(nothing) ? `<div class="colstack">${sec('Expiring soon — confirm availability in Zillow', 'renew-expiring', expTable)}${sec('Expired — reactivate in Zillow', 'renew-expired', expdTable)}${R.showDismissed ? sec('Dismissed', 'renew-dismissed', dismissed.length ? disTable : '<div class="empty-s">None.</div>') : ''}</div>` : ''}`;
+}
+async function dismissListing(id, reason) {
+  const R = state.renew; if (R.busy.has(id)) return;
+  R.busy.add(id); renderRenew();
+  try { await api.dismissListing(id, reason); const rows = await api.listings(); R.list = rows || []; }
+  catch (e) { toast(e.message || 'The change was not saved.'); }
+  R.busy.delete(id); renewChrome(); renderRenew(); if (state.view === 'dash') renderDash();
+}
+async function undoListing(id) {
+  const R = state.renew; if (R.busy.has(id)) return;
+  R.busy.add(id); renderRenew();
+  try { await api.undismissListing(id); const rows = await api.listings(); R.list = rows || []; }
+  catch (e) { toast(e.message || 'The change was not saved.'); }
+  R.busy.delete(id); renewChrome(); renderRenew();
+}
+$('#view-renew').addEventListener('click', e => {
+  const t = e.target, id = (k) => { const b = t.closest(`[${k}]`); return b ? b.getAttribute(k) : null; };
+  if (t.closest('#renewRetry')) { state.renew.busyLoad = false; loadListings(); return; }
+  let v;
+  if ((v = id('data-renewed')) != null) { if (!t.closest('[data-renewed]').disabled) dismissListing(Number(v), 'renewed'); return; }
+  if ((v = id('data-undo')) != null) { if (!t.closest('[data-undo]').disabled) undoListing(Number(v)); return; }
+  if ((v = id('data-rented')) != null) {
+    const l = state.renew.list.find(x => String(x.id) === v); if (!l || t.closest('[data-rented]').disabled) return;
+    showModal(`<h3 id="rentText">Mark ${esc(l.listing_address || 'this listing')} as rented?</h3><p style="margin:0;color:var(--ink-2)">It will be hidden from this list. You can bring it back with "Show dismissed" and Undo.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="rentGo">Rented</button></div>`);
+    $('#rentGo').onclick = () => { closeModal(); dismissListing(l.id, 'rented'); };
+  }
+});
+$('#view-renew').addEventListener('change', e => {
+  if (e.target.id === 'rAcct') { state.renew.acct = e.target.value; renderRenew(); }
+  else if (e.target.id === 'rShowDis') { state.renew.showDismissed = e.target.checked; renderRenew(); }
+});
 
 // ───────── Start ─────────
 (async function init() {
