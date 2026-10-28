@@ -1926,7 +1926,7 @@ function renderDash() {
     ${tile('Team not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
     ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
-    ${state.rOn && state.me.role === 'manager' ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'expiring in 7 days or expired', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
+    ${state.rOn && state.me.role === 'manager' ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
   </div>`;
 
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
@@ -2045,7 +2045,8 @@ $('#dash').addEventListener('change', onChange);
 // ───────── Renewals (Step 1: read-only; nothing here changes anything in Zillow) ─────────
 // The list comes from zillow_listings (managers only). If that table does not exist yet, the tab and the tile stay hidden.
 const isMissingTable = (e) => !!e && (e.code === 'PGRST205' || e.code === '42P01' || /zillow_listings/i.test(e.message || ''));
-const rNeeds = (l) => !l.dismissed_at && (l.status === 'expired' || (l.status === 'expiring' && l.expires_on && daysFromToday(dateOnly(l.expires_on)) <= 7));
+// The badge and the tile count only listings waiting to be confirmed: expiring and not dismissed. Expired ones are not in the number.
+const rNeeds = (l) => !l.dismissed_at && l.status === 'expiring';
 const renewCount = () => state.renew.list.filter(rNeeds).length;
 const zillowUrl = (id) => /^[A-Za-z0-9_-]+$/.test(String(id || '')) ? `https://www.zillow.com/rental-manager/properties/${encodeURIComponent(id)}/listing` : '';   // built from the id, never a signed link
 function renewChrome() {
@@ -2119,9 +2120,10 @@ function renderRenew() {
   const sec = (title, id, body) => `<section class="card" id="${id}"><h2>${title}</h2><div class="tablewrap" style="border:0;border-radius:0">${body}</div></section>`;
   const linkRows = expiring.filter(confirmable), nSel = linkRows.filter(l => R.sel.has(l.id)).length, B = R.batch, running = !!(B && B.running);
   const cfBar = (R.cOn && !R.cErr && (linkRows.length || B)) ? `<div class="bulkbar" id="cfBar" style="position:static">
-    ${linkRows.length ? `<div class="bulkrow"><label class="contacted"><input type="checkbox" id="cfAll" ${nSel && nSel === linkRows.length ? 'checked' : ''} ${running ? 'disabled' : ''}>Select all with a confirm link</label><button class="btn small primary" id="cfGo" ${nSel && !running ? '' : 'disabled'}>Confirm all selected (${nSel})</button></div>` : ''}
+    ${linkRows.length ? `<div class="bulkrow"><label class="contacted"><input type="checkbox" id="cfAll" ${nSel && nSel === Math.min(CONFIRM_MAX, linkRows.length) ? 'checked' : ''} ${running ? 'disabled' : ''}>Select the ${CONFIRM_MAX} that expire soonest</label><button class="btn small primary" id="cfGo" ${nSel && !running ? '' : 'disabled'}>Confirm selected (${nSel})</button></div>
+    ${R.capNote || linkRows.length > CONFIRM_MAX ? `<div class="sub" id="cfCap">${esc(CAP_MSG)}</div>` : ''}` : ''}
     ${B && B.blocked ? `<div class="bulkrow bad" id="cfBlocked">${esc(BLOCKED_MSG)}</div>` : ''}
-    ${B && B.running ? `<div class="bulkrow"><b class="num" id="cfProg">Confirming ${B.done} of ${B.total}…</b><button class="btn small" id="cfStop" ${B.stop ? 'disabled' : ''}>Stop</button></div>` : ''}
+    ${B && B.running ? `<div class="bulkrow"><b class="num" id="cfProg">Opening ${B.cur || 1} of ${B.total}…</b><button class="btn small" id="cfStop" ${B.stop ? 'disabled' : ''}>Stop</button></div>` : ''}
     ${B && B.finished ? `<div class="bulkrow" id="cfDone"><span>Opened ${B.opened.length} confirm page${B.opened.length === 1 ? '' : 's'} in Zillow (${B.failed.length} failed${B.failed.length ? ': ' + esc([...new Set(B.failed.map(f => f.reason))].join('; ')) : ''}). Did Zillow confirm ${B.opened.length === 1 ? 'it' : 'them'}?</span>${B.opened.length ? `<button class="btn small primary" id="cfMarkAll" ${B.marking ? 'disabled' : ''}>Mark all ${B.opened.length} as renewed</button>` : ''}<button class="btn small" id="cfNotYet" ${B.marking ? 'disabled' : ''}>Not yet</button></div>` : ''}</div>` : '';
   const expTable = expiring.length ? `${cfBar}<table>${head(['Listing', 'Account', 'Expires', 'Last notice', ''])}<tbody>${expiring.map(l => {
     const d = l.expires_on ? dateOnly(l.expires_on) : null, days = d ? daysFromToday(d) : null;
@@ -2132,46 +2134,51 @@ function renderRenew() {
   const disTable = `<table>${head(['Listing', 'Account', 'Dismissed', '', ''])}<tbody>${dismissed.map(l => `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>${esc(l.dismissed_reason || 'other')} · ${esc(memberName(l.dismissed_by) || 'a team member')} · ${esc(fmtShort(l.dismissed_at))}</td><td></td><td><div class="row">${open(l)}<button class="btn small" data-undo="${esc(l.id)}" ${dis(l)}>Undo</button></div></td></tr>`).join('')}</tbody></table>`;
   const nothing = !expiring.length && !expired.length && !dismissed.length;
   el.innerHTML = `<p class="renew-note" id="renewNote">Confirm in Zillow opens Zillow's own confirm page in a new tab, the same as the button in Zillow's email. LoopIn never confirms anything by itself.</p>
+    ${R.cOn && !R.cErr ? `<p class="renew-note sub" id="renewBatchNote">Confirm up to 10 at a time. LoopIn opens them a few seconds apart so Zillow does not ask if you're human. If Zillow shows a check, answer it in that tab.</p>` : ''}
     <p class="renew-note sub" id="renewHint">Mark as renewed: ${'Use after you confirm it in Zillow. This does not change Zillow.'} Rented hides the listing.</p>
     <div class="toolbar"><select class="btn" id="rAcct" aria-label="Zillow account"><option value="">All accounts</option>${accts.map(a => `<option value="${esc(a)}" ${a === keep ? 'selected' : ''} title="${esc(a)}">${esc(zLocal(a))}</option>`).join('')}</select>
       <label class="contacted"><input type="checkbox" id="rShowDis" ${R.showDismissed ? 'checked' : ''}>Show dismissed</label></div>
     ${R.err ? `<div class="empty-s" id="renewErr">${esc(R.err)} <button class="btn small" id="renewRetry">Try again</button></div>` : !R.loaded ? '<div class="loading-s">Loading…</div>' : nothing ? '<div class="empty-s" id="renewEmpty">No listings need attention.</div>' : ''}
     ${R.loaded && !(nothing) ? `<div class="colstack">${sec('Expiring soon — confirm availability in Zillow', 'renew-expiring', expTable)}${sec('Expired — reactivate in Zillow', 'renew-expired', expdTable)}${R.showDismissed ? sec('Dismissed', 'renew-dismissed', dismissed.length ? disTable : '<div class="empty-s">None.</div>') : ''}</div>` : ''}`;
 }
-// ----- Confirm all selected, in batches -----
-const CONFIRM_BATCH = 10;          // never more than this many Zillow tabs open at once
-const CONFIRM_WAIT_MS = 20000;     // how long a batch of tabs stays open before they are closed
-let confirmWaitMs = CONFIRM_WAIT_MS;   // the harness can shorten this
-const BLOCKED_MSG = 'Your browser blocked the pop-ups. Click the pop-up icon at the right of the address bar, choose Always allow pop-ups from greglee722.github.io, then click Confirm all selected again.';
+// ----- Confirm selected (up to 10 at a time) -----
+// More than 10 tabs in a row makes Zillow ask if we are human, so one click opens at most CONFIRM_MAX listings.
+const CONFIRM_MAX = 10;
+const CONFIRM_STAGGER_MS = 3000;   // tabs open one at a time, this far apart
+const CONFIRM_WAIT_MS = 30000;     // after the LAST tab opens: wait, then close the tabs
+let confirmStaggerMs = CONFIRM_STAGGER_MS, confirmWaitMs = CONFIRM_WAIT_MS;   // the harness can shorten these
+const BLOCKED_MSG = 'Your browser blocked the pop-ups. Click the pop-up icon at the right of the address bar, choose Always allow pop-ups from greglee722.github.io, then click Confirm selected again.';
+const CAP_MSG = "You can confirm up to 10 at a time. Opening more makes Zillow ask if you're human. Confirm these 10, then select the next ones.";
 const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
 const confirmable = (l) => l && l.status === 'expiring' && !l.dismissed_at && state.renew.cOn && !state.renew.cErr && state.renew.confirm.has(Number(l.id));
-function confirmAllClick() {
+const bySoonest = (a, b) => String(a.expires_on || '9999').localeCompare(String(b.expires_on || '9999')) || String(a.listing_address || '').localeCompare(String(b.listing_address || ''));
+function confirmSelectedClick() {
   const R = state.renew; if (R.batch && R.batch.running) return;
-  const ids = [...R.sel].filter(id => confirmable(R.list.find(l => l.id === id)));
+  const ids = [...R.sel].filter(id => confirmable(R.list.find(l => l.id === id))).slice(0, CONFIRM_MAX);
   if (!ids.length) return;
   const first = window.open('', '_blank');   // opened synchronously inside the click, so the pop-up blocker allows it
   if (!first) { R.batch = { blocked: true, running: false }; renderRenew(); return; }
   R.batch = { running: true, total: ids.length, done: 0, stop: false, opened: [], failed: [], blocked: false, ids };
-  runBatches(first);
+  runConfirm(first);
 }
-async function runBatches(first) {
-  const R = state.renew, B = R.batch, gen = loadGen; let pre = first;
+async function runConfirm(first) {
+  const R = state.renew, B = R.batch, gen = loadGen, tabs = []; let pre = first;
   renderRenew();
-  for (let i = 0; i < B.ids.length && !B.stop; i += CONFIRM_BATCH) {
-    const tabs = [];
-    for (const id of B.ids.slice(i, i + CONFIRM_BATCH)) {
-      const w = pre || window.open('', '_blank'); pre = null;
-      if (!w) { B.blocked = true; B.stop = true; break; }
-      try {
-        const url = await api.confirmUrl(id);   // used once, never stored or shown
-        if (gen !== loadGen) return;
-        w.opener = null; w.location.href = url; tabs.push(w); B.opened.push(id);
-      } catch (e) { try { w.close(); } catch (_) {} B.failed.push({ id, reason: e.message || 'Could not open the confirm page.' }); }
-      B.done++; renderRenew();
-    }
-    if (tabs.length) await sleepMs(confirmWaitMs);
-    tabs.forEach(w => { try { w.close(); } catch (_) {} });   // every tab of the batch is closed before the next batch opens
+  for (let k = 0; k < B.ids.length; k++) {
+    const id = B.ids[k];
+    if (k > 0) { await sleepMs(confirmStaggerMs); if (gen !== loadGen) return; if (B.stop) break; }   // Stop works between tabs
+    B.cur = k + 1; renderRenew();
+    const w = pre || window.open('', '_blank'); pre = null;
+    if (!w) { B.blocked = true; break; }
+    try {
+      const url = await api.confirmUrl(id);   // used once, never stored or shown
+      if (gen !== loadGen) return;
+      w.opener = null; w.location.href = url; tabs.push(w); B.opened.push(id);
+    } catch (e) { try { w.close(); } catch (_) {} B.failed.push({ id, reason: e.message || 'Could not open the confirm page.' }); }
+    B.done++; renderRenew();
   }
+  if (tabs.length) await sleepMs(confirmWaitMs);
+  tabs.forEach(w => { try { w.close(); } catch (_) {} });
   B.running = false; B.finished = true; R.sel.clear();
   renderRenew();
 }
@@ -2220,7 +2227,7 @@ $('#view-renew').addEventListener('click', e => {
   const t = e.target, id = (k) => { const b = t.closest(`[${k}]`); return b ? b.getAttribute(k) : null; };
   if (t.closest('#renewRetry')) { state.renew.busyLoad = false; loadListings(); return; }
   let v;
-  if (t.closest('#cfGo')) { confirmAllClick(); return; }
+  if (t.closest('#cfGo')) { confirmSelectedClick(); return; }
   if (t.closest('#cfStop')) { if (state.renew.batch) { state.renew.batch.stop = true; renderRenew(); } return; }
   if (t.closest('#cfMarkAll')) { markAllRenewed(); return; }
   if (t.closest('#cfNotYet')) { if (state.renew.batch && !state.renew.batch.marking) { state.renew.batch = null; renderRenew(); } return; }
@@ -2241,8 +2248,18 @@ $('#view-renew').addEventListener('click', e => {
   }
 });
 $('#view-renew').addEventListener('change', e => {
-  if (e.target.dataset.pick != null) { const idn = Number(e.target.dataset.pick); if (e.target.checked) state.renew.sel.add(idn); else state.renew.sel.delete(idn); renderRenew(); return; }
-  if (e.target.id === 'cfAll') { document.querySelectorAll('#view-renew [data-pick]').forEach(b => { const n = Number(b.dataset.pick); if (e.target.checked) state.renew.sel.add(n); else state.renew.sel.delete(n); }); renderRenew(); return; }
+  if (e.target.dataset.pick != null) {
+    const idn = Number(e.target.dataset.pick), R = state.renew;
+    if (e.target.checked && R.sel.size >= CONFIRM_MAX) { e.target.checked = false; R.capNote = true; renderRenew(); return; }   // an 11th tick is refused
+    if (e.target.checked) R.sel.add(idn); else { R.sel.delete(idn); R.capNote = false; }
+    renderRenew(); return;
+  }
+  if (e.target.id === 'cfAll') {
+    const R = state.renew, shown = [...document.querySelectorAll('#view-renew [data-pick]')].map(b => R.list.find(l => l.id === Number(b.dataset.pick))).filter(Boolean).sort(bySoonest);
+    R.capNote = false;
+    if (e.target.checked) { R.sel.clear(); shown.slice(0, CONFIRM_MAX).forEach(l => R.sel.add(l.id)); } else R.sel.clear();
+    renderRenew(); return;
+  }
   if (e.target.id === 'rAcct') { state.renew.acct = e.target.value; renderRenew(); }
   else if (e.target.id === 'rShowDis') { state.renew.showDismissed = e.target.checked; renderRenew(); }
 });
