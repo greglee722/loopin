@@ -625,8 +625,12 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 .loadmsg { font-size: 12.5px; color: var(--ink-3); }
 .loadmsg.bad { color: var(--bad); }
 .more { display: flex; justify-content: center; margin: 14px 0 4px; }
-.pc { grid-template-columns: auto minmax(0, 1fr); }
-#view-people .c-name { left: 0; }
+.pc { grid-template-columns: auto auto minmax(0, 1fr); }
+.bulkbar { position: sticky; top: 64px; z-index: 6; flex-direction: column; align-items: stretch; gap: 6px; }
+.bulkrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bulkrow.bad { color: var(--bad); }
+.bulkbar select.btn { max-width: 100%; }
+#onlyChip { margin: 0 0 10px; }
 @media (min-width: 861px) { #view-people table { min-width: 1060px; } }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
@@ -659,6 +663,7 @@ th.num-col button { white-space: nowrap; }
 }
 @media (max-width: 600px) {
   .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bulkbar { top: 58px; }
   .me .nm { display: none; }
   .toolbar select.btn { flex: 1 1 130px; min-width: 0; }
   .authcard { margin-top: 6vh; }
@@ -696,10 +701,12 @@ th.num-col button { white-space: nowrap; }
       <div class="spacer"></div>
       <div class="countline"><span id="count" aria-live="polite"></span><span class="loadmsg" id="loadmsg"></span></div>
     </div>
+    <div class="sub" id="onlyChip" hidden><span id="onlyText"></span> <button class="btn small" id="onlyClear">Show everyone</button></div>
+    <div class="bulkbar" id="bulkbar" hidden></div>
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th class="c-name">Name</th><th>Contacted</th><th>Agent</th><th>Phone</th><th>Email</th><th>Stage</th><th>Source</th><th id="thZ">Zillow account</th>
+          <th class="c-check"><input type="checkbox" id="checkAll" aria-label="Select the people shown"></th><th class="c-name">Name</th><th>Contacted</th><th>Agent</th><th>Phone</th><th>Email</th><th>Stage</th><th>Source</th><th id="thZ">Zillow account</th>
           <th class="num-col" id="thCreated" aria-sort="descending"><button class="sortbtn" data-sort="created">Created</button></th>
           <th class="num-col" id="thActivity" aria-sort="none"><button class="sortbtn" data-sort="activity">Last activity</button></th>
         </tr></thead>
@@ -785,6 +792,10 @@ function makeApi(url, key) {
       return ok(await sb.from('hit_list').select('person_id,member_id,position,next_step,added_at').order('member_id').order('position'));
     },
     setZillow(on) { withZ = !!on; },
+    // Bulk update one chunk (100 ids or fewer). Returns the updated rows.
+    async bulkUpdate(ids, patch) {
+      return ok(await sb.from('people').update(patch).in('id', ids).select(cols()));
+    },
     async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
@@ -859,6 +870,7 @@ const state = {
   sort: { key: 'created', dir: 'desc' }, limit: SHOW,
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
+  sel: new Set(), onlyIds: null, bulk: null, list: [], shownIds: [],
   view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
@@ -952,8 +964,9 @@ function resetApp() {
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
   Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
+    onlyIds: null, bulk: null, list: [], shownIds: [],
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
-  inqCache.clear();
+  inqCache.clear(); state.sel.clear();
   $('#search').value = '';
   closeModal();
 }
@@ -1081,6 +1094,7 @@ function filtered() {
   const q = state.q.trim().toLowerCase();
   const qd = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';   // phone search only when the box holds just digits and punctuation
   const out = all.filter(p => {
+    if (state.onlyIds && !state.onlyIds.has(p.id)) return false;
     if (state.agent && p.owner_id !== state.agent) return false;
     if (state.stage && p.stage_id !== +state.stage) return false;
     if (state.unc && (p.contacted_at || closes(p))) return false;
@@ -1130,6 +1144,7 @@ function personCard(p) {
   const owner = p.owner_id ? `<span class="who">${avatar(p.owner_id, 'sm')}${esc(firstName(p.owner_id) || 'Team member')}</span>` : '';
   const stg = stageOf(p);
   return `<div class="pc">
+    <input type="checkbox" data-sel="${esc(p.id)}" ${state.sel.has(p.id) ? 'checked' : ''} aria-label="Select ${esc(p._name || 'this person')}">
     <div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>
     <div class="pc-main">
       <div class="pc-top">${isContacted(p) ? '' : '<span class="dot" aria-label="Not contacted yet"></span>'}<span class="name">${esc(p._name || '(no name)')}</span></div>
@@ -1141,7 +1156,9 @@ function personCard(p) {
 }
 function rowHtml(p) {
   const ph = (p.person_phones || [])[0], em = bestEmail(p);
-  return `<tr data-open="${esc(p.id)}" class="${isContacted(p) ? '' : 'unread'}">
+  const sel = state.sel.has(p.id);
+  return `<tr data-open="${esc(p.id)}" class="${isContacted(p) ? '' : 'unread'} ${sel ? 'sel' : ''}">
+    <td class="c-check"><input type="checkbox" data-sel="${esc(p.id)}" ${sel ? 'checked' : ''} aria-label="Select ${esc(p._name || 'this person')}"></td>
     <td class="c-name"><div class="who"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span><div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div><div style="min-width:0"><div class="name">${esc(p._name || '(no name)')}</div></div></div></td>
     <td>${contactedBox(p, true)}</td>
     <td>${ownerChip(p)}</td>
@@ -1165,14 +1182,18 @@ function renderList() {
     th.setAttribute('aria-sort', on ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none');
     th.querySelector('button').textContent = (key === 'created' ? 'Created' : 'Last activity') + (on ? (state.sort.dir === 'asc' ? ' ↑' : ' ↓') : '');
   }
-  $('#rows').innerHTML = list.slice(0, state.limit).map(rowHtml).join('');
+  const rowsShown = list.slice(0, state.limit);
+  state.list = list; state.shownIds = rowsShown.map(p => p.id);
+  $('#rows').innerHTML = rowsShown.map(rowHtml).join('');
+  $('#onlyChip').hidden = !state.onlyIds; if (state.onlyIds) $('#onlyText').textContent = `Showing the ${plural(state.onlyIds.size, 'person', 'people')} that were skipped.`;
   $('#empty').hidden = n > 0 || state.loading;
   $('#more').hidden = n <= state.limit;
   $('#moreBtn').textContent = n - state.limit > SHOW ? `Show ${SHOW} more` : `Show ${n - state.limit} more`;
+  renderBulk();
 }
-function resetPaging() { state.limit = SHOW; renderList(); }
+function resetPaging() { filterChanged(); }
 
-$('#search').addEventListener('input', e => { state.q = e.target.value; state.limit = SHOW; if (state.view === 'dash') go('people'); else renderList(); });
+$('#search').addEventListener('input', e => { state.q = e.target.value; if (state.view === 'dash') { state.sel.clear(); state.onlyIds = null; state.limit = SHOW; go('people'); } else filterChanged(); });
 $('#fAgent').addEventListener('change', e => { state.agent = e.target.value; resetPaging(); });
 $('#fZ').addEventListener('change', e => { state.zacct = e.target.value; resetPaging(); });
 $('#fStage').addEventListener('change', e => { state.stage = e.target.value; resetPaging(); });
@@ -1189,6 +1210,155 @@ $('#rows').addEventListener('click', e => {
   const r = e.target.closest('[data-open]'); if (r) openPanel(r.dataset.open);
 });
 $('#rows').addEventListener('change', onChange);
+
+// ───────── Selection and bulk edit (People) ─────────
+// Only leads where canEdit(p) is true change (pilot rule). One chunk of 100 ids at a time.
+const CHUNK = 100;
+const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+const selPeople = () => [...state.sel].map(id => byId.get(id)).filter(Boolean);
+function filterChanged() { state.sel.clear(); state.onlyIds = null; state.limit = SHOW; renderList(); }
+function toggleSel(id, on) { if (on) state.sel.add(id); else state.sel.delete(id); syncSel(); }
+// Update the checkboxes and row styles without redrawing the rows.
+function syncSel() {
+  for (const tr of $('#rows').querySelectorAll('tr[data-open]')) {
+    const on = state.sel.has(tr.dataset.open);
+    tr.classList.toggle('sel', on);
+    tr.querySelectorAll('[data-sel]').forEach(c => { c.checked = on; });
+  }
+  renderBulk();
+}
+function selectAllMatching() { (state.list || []).forEach(p => state.sel.add(p.id)); syncSel(); }
+$('#checkAll').addEventListener('change', e => {
+  const ids = state.shownIds || [];
+  const all = ids.length > 0 && ids.every(id => state.sel.has(id));
+  ids.forEach(id => all ? state.sel.delete(id) : state.sel.add(id));
+  syncSel();
+});
+
+function renderBulk() {
+  const bar = $('#bulkbar'), b = state.bulk, n = state.sel.size;
+  const shown = state.shownIds || [], nShown = shown.filter(id => state.sel.has(id)).length;
+  const ca = $('#checkAll');
+  ca.checked = shown.length > 0 && nShown === shown.length; ca.indeterminate = nShown > 0 && nShown < shown.length;
+  let html = '';
+  if (b && b.busy) html = `<div class="bulkrow"><b class="num" id="bulkProg">Saving ${b.done.toLocaleString('en-US')} of ${b.total.toLocaleString('en-US')}…</b></div>`;
+  else {
+    if (n) {
+      const people = selPeople(), ed = people.filter(canEdit).length, ro = people.length - ed;
+      const allShown = shown.length > 0 && nShown === shown.length, matchN = (state.list || []).length;
+      html += `<div class="bulkrow"><b class="num" id="bulkCount">${n.toLocaleString('en-US')} selected</b>
+        <select class="btn small" id="bulkStage" aria-label="Change stage"><option value="">Change stage…</option>${state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+        <button class="btn small" id="bulkOn">Mark contacted</button><button class="btn small" id="bulkOff">Mark not contacted</button>
+        <button class="btn small" id="bulkClear">Clear</button>
+        ${allShown && n < matchN ? `<button class="btn small soft" id="selAll">Select all ${matchN.toLocaleString('en-US')} people that match</button>` : ''}</div>
+        <div class="sub" id="bulkInfo">${ro === 0 ? `All ${ed.toLocaleString('en-US')} can change.` : `${ed.toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')} can change. ${ro.toLocaleString('en-US')} ${ro === 1 ? 'is an agent\'s lead' : 'are agents\' leads'} (read-only while FUB is their source).`}</div>`;
+    }
+    if (b && b.err) html += `<div class="bulkrow bad" id="bulkErr">Saved ${b.saved.toLocaleString('en-US')}. Stopped: ${esc(b.err)}. <button class="btn small" id="bulkRetry">Try again</button></div>`;
+    if (b && b.res) {
+      const names = (b.incNames || []).slice(0, 20).map(esc).join(', '), more = (b.incNames || []).length - 20;
+      html += `<div class="bulkrow" id="bulkRes"><span>${esc(b.res)}</span><span class="spacer"></span><button class="btn small" id="bulkDismiss">Dismiss</button></div>`
+        + (b.incNames && b.incNames.length ? `<div class="sub" id="bulkSkipped">Skipped: ${names}${more > 0 ? ` and ${more.toLocaleString('en-US')} more` : ''}. <button class="btn small soft" id="showThese">Show these</button></div>` : '');
+    }
+  }
+  bar.innerHTML = html; bar.hidden = !html;
+}
+
+function planFor(kind, arg) {
+  const people = selPeople(), ed = people.filter(canEdit), ro = people.length - ed.length;
+  if (kind === 'stage') {
+    const st = state.stageMap.get(arg);
+    const cand = ed.filter(p => p.stage_id !== st.id);   // a lead already in the stage is not sent: an update would still stamp local_edited_at
+    let run = cand, inc = [];
+    if (st.is_nonworkable) { run = cand.filter(p => !missingFields(p).length); inc = cand.filter(p => !run.includes(p)); }   // the reason comes from the dialog
+    return { kind, st, run, inc, ro, same: ed.length - cand.length, label: st.name, reason: '' };
+  }
+  const run = ed.filter(p => !!p.contacted_at !== arg);   // never restamp a lead that is already in that state
+  return { kind, on: arg, run, inc: [], ro, same: ed.length - run.length };
+}
+function askBulk(plan) {
+  const n = plan.run.length;
+  const needReason = plan.kind === 'stage' && plan.st.is_nonworkable && n > 0;   // the chosen reason applies to the leads that have none
+  const notes = [];
+  if (plan.ro) notes.push(`${plural(plan.ro, 'is an agent\'s lead', 'are agents\' leads')} and will not change.`);
+  if (plan.inc.length) notes.push(`${plan.inc.length.toLocaleString('en-US')} will be skipped: required fields are missing.`);
+  if (plan.same) notes.push(plan.kind === 'stage' ? `${plan.same.toLocaleString('en-US')} ${plan.same === 1 ? 'is' : 'are'} already in ${esc(plan.label)}.` : `${plan.same.toLocaleString('en-US')} ${plan.on ? 'are already contacted' : 'are already not contacted'}.`);
+  const title = plan.kind === 'stage' ? `Move ${plural(n, 'person', 'people')} to ${esc(plan.label)}?` : `Mark ${plural(n, 'person', 'people')} as ${plan.on ? 'contacted' : 'not contacted'}?`;
+  const go = plan.kind === 'stage' ? (n > 500 ? `Move ${n.toLocaleString('en-US')} people` : 'Move') : (n > 500 ? `Mark ${n.toLocaleString('en-US')} people` : 'Mark');
+  showModal(n === 0
+    ? `<h3>Nothing to change</h3><p style="margin:0;color:var(--ink-2)">${notes.join(' ') || 'No one selected can change.'}</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button></div>`
+    : `<h3>${title}</h3>${notes.length ? `<p style="margin:0;color:var(--ink-2)" id="bulkNotes">${notes.join(' ')}</p>` : ''}
+       ${needReason ? `<div id="bulkReason"><div class="field"><label>Reason <span class="req">*</span></label></div><div class="reasons">${Object.entries(REASONS).map(([k, t]) => `<label><input type="radio" name="b_reason" value="${k}"> ${esc(t)}</label>`).join('')}</div></div>` : ''}
+       <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="bulkGo" ${needReason ? 'disabled' : ''}>${esc(go)}</button></div>`);
+  if (n) {
+    if (needReason) $('#modal').querySelectorAll('[name="b_reason"]').forEach(r => r.onchange = () => { $('#bulkGo').disabled = false; });
+    $('#bulkGo').onclick = () => {
+      if (needReason) { const r = $('#modal').querySelector('[name="b_reason"]:checked'); if (!r) return; plan.reason = r.value; }
+      closeModal(); runBulk(plan);
+    };
+  }
+}
+async function runBulk(plan) {
+  const nowIso = new Date().toISOString(), me = state.me.id;
+  let segs;
+  if (plan.kind === 'stage') {
+    const st = plan.st.id;
+    segs = plan.st.is_nonworkable
+      ? [{ ids: plan.run.filter(p => !p.nonworkable_reason).map(p => p.id), patch: { stage_id: st, nonworkable_reason: plan.reason } },
+         { ids: plan.run.filter(p => p.nonworkable_reason).map(p => p.id), patch: { stage_id: st } }]   // a lead that already has a reason keeps it
+      : [{ ids: plan.run.map(p => p.id), patch: { stage_id: st } }];
+  } else segs = [{ ids: plan.run.map(p => p.id), patch: plan.on ? { contacted_at: nowIso, contacted_by: me } : { contacted_at: null, contacted_by: null } }];
+  const chunks = [];
+  for (const sg of segs) for (let i = 0; i < sg.ids.length; i += CHUNK) chunks.push({ ids: sg.ids.slice(i, i + CHUNK), patch: sg.patch });
+  state.bulk = { busy: true, done: 0, total: plan.run.length, saved: 0, chunks, ci: 0, plan, err: '', res: '',
+    incNames: plan.inc.map(p => p._name || '(no name)'), incIds: plan.inc.map(p => p.id), gen: loadGen };
+  await continueBulk();
+}
+async function continueBulk() {
+  const b = state.bulk; b.busy = true; b.err = ''; renderBulk();
+  while (b.ci < b.chunks.length) {
+    const ch = b.chunks[b.ci];
+    try {
+      const rows = await api.bulkUpdate(ch.ids, ch.patch);
+      if (b.gen !== loadGen) return;
+      rows.forEach(setRow); b.saved += rows.length; b.done += ch.ids.length; b.ci++;
+      renderList(); renderBulk();
+    } catch (e) {
+      if (b.gen !== loadGen) return;
+      b.busy = false; b.err = e.message || 'The change was not saved.'; renderList(); renderBulk(); return;
+    }
+  }
+  b.busy = false;
+  const p = b.plan, parts = [];
+  parts.push(p.kind === 'stage' ? `${b.saved.toLocaleString('en-US')} moved to ${p.label}.` : `${b.saved.toLocaleString('en-US')} marked ${p.on ? 'contacted' : 'not contacted'}.`);
+  if (b.saved < b.total) parts.push(`${(b.total - b.saved).toLocaleString('en-US')} did not save.`);
+  if (p.ro) parts.push(`${p.ro.toLocaleString('en-US')} skipped (agents' leads).`);
+  if (p.inc.length) parts.push(`${p.inc.length.toLocaleString('en-US')} skipped (missing required fields).`);
+  if (p.same) parts.push(p.kind === 'stage' ? `${p.same.toLocaleString('en-US')} already in ${p.label}.` : `${p.same.toLocaleString('en-US')} already ${p.on ? 'contacted' : 'not contacted'}.`);
+  b.res = parts.join(' ');
+  state.sel.clear(); toast(parts[0]); renderList(); renderBulk();
+}
+function showThese(ids) {
+  state.q = ''; $('#search').value = ''; state.agent = ''; state.stage = ''; state.unc = false; state.zacct = '';
+  state.sel.clear(); state.onlyIds = new Set(ids); state.limit = SHOW;
+  state.bulk = Object.assign({}, state.bulk, { res: '', incNames: [] });
+  renderFilters(); renderList();
+}
+$('#bulkbar').addEventListener('click', e => {
+  const t = e.target;
+  if (t.id === 'selAll') selectAllMatching();
+  else if (t.id === 'bulkClear') { state.sel.clear(); syncSel(); }
+  else if (t.id === 'bulkOn') askBulk(planFor('contact', true));
+  else if (t.id === 'bulkOff') askBulk(planFor('contact', false));
+  else if (t.id === 'bulkRetry') continueBulk();
+  else if (t.id === 'bulkDismiss') { state.bulk = null; renderBulk(); }
+  else if (t.id === 'showThese') showThese(state.bulk.incIds);
+});
+$('#bulkbar').addEventListener('change', e => {
+  if (e.target.id !== 'bulkStage' || !e.target.value) return;
+  const id = +e.target.value; e.target.value = '';
+  askBulk(planFor('stage', id));
+});
+$('#onlyClear').addEventListener('click', () => { state.onlyIds = null; state.limit = SHOW; renderList(); });
 
 // ───────── Writes ─────────
 // One write at a time per person. The row changes only after the database answers.
@@ -1213,7 +1383,8 @@ async function reread(id) {
 }
 function onChange(e) {
   const t = e.target;
-  if (t.dataset.contact) toggleContacted(t.dataset.contact, t.checked);
+  if (t.dataset.sel) toggleSel(t.dataset.sel, t.checked);
+  else if (t.dataset.contact) toggleContacted(t.dataset.contact, t.checked);
   else if (t.dataset.stage) changeStage(t.dataset.stage, +t.value);
 }
 async function toggleContacted(id, on) {
@@ -1587,7 +1758,7 @@ function renderDash() {
 // Open People with these filters set. Sorted by Created, newest first.
 function peopleWith(o = {}) {
   state.q = ''; $('#search').value = '';
-  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc; state.zacct = '';
+  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc; state.zacct = ''; state.sel.clear(); state.onlyIds = null;
   state.sort = { key: 'created', dir: 'desc' }; state.limit = SHOW;
   renderFilters();
   go('people');
