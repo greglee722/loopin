@@ -634,6 +634,11 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 @media (min-width: 861px) { #view-people table { min-width: 1060px; } }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
+.note .meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; } .note .meta .spacer { flex: 1; }
+.tagrow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.vrow:hover .pen { opacity: 1; } .note:hover .pen, .dvals:hover .pen { opacity: 1; }
+.editbox textarea { min-height: 70px; }
+.dvals .tagadd { flex: 1 1 90px; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; background: var(--surface); }
 .bar > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zrow .sub { padding-left: 128px; margin-top: -2px; } .zrow.zwarn .sub { padding-left: 0; }
 .zrow.zwarn { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -652,7 +657,7 @@ th.num-col button { white-space: nowrap; }
 .note .meta b { color: var(--ink-2); }
 .loading-s { color: var(--ink-3); font-size: 13px; padding: 6px 0; }
 .err-s { color: var(--bad); font-size: 13px; padding: 6px 0; }
-.dvals { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 6px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.dvals { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) 28px; gap: 6px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .dvals:last-child { border-bottom: 0; }
 .dvals .dlabel, .dvals .dval { min-width: 0; }
 @media (max-width: 860px) {
@@ -697,9 +702,9 @@ th.num-col button { white-space: nowrap; }
       <select class="btn" id="fAgent" aria-label="Agent" hidden></select>
       <select class="btn" id="fStage" aria-label="Stage"></select>
       <select class="btn" id="fZ" aria-label="Zillow account"></select>
-      <button class="btn" id="fUnc" aria-pressed="false">Not contacted yet</button>
+      <button class="btn" id="fUnc" aria-pressed="false">Not contacted (30 days)</button>
       <div class="spacer"></div>
-      <div class="countline"><span id="count" aria-live="polite"></span><span class="loadmsg" id="loadmsg"></span></div>
+      <div class="countline"><span id="count" aria-live="polite"></span><button class="btn small" id="exportShown" hidden></button><span class="loadmsg" id="loadmsg"></span></div>
     </div>
     <div class="sub" id="onlyChip" hidden><span id="onlyText"></span> <button class="btn small" id="onlyClear">Show everyone</button></div>
     <div class="bulkbar" id="bulkbar" hidden></div>
@@ -732,7 +737,7 @@ const SUPABASE_URL = 'https://qxzdwpzhpubcufhvjwjk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publishable: safe in public code
 
 // The columns one list row needs. Writes ask for the same columns back.
-const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(email,is_relay),person_phones(phone,label)';
+const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 
@@ -741,6 +746,8 @@ function makeApi(url, key) {
   const sb = window.supabase.createClient(url, key);
   const ok = (r) => { if (r.error) throw Object.assign(new Error(r.error.message), { code: r.error.code }); return r.data; };
   // Until the zillow_account column exists, the app asks for the columns without it (see setZillow).
+  // PostgREST returns no error when row-level security filters a DELETE down to 0 rows, so ask for the deleted ids back.
+  const gone = (r) => { if (!ok(r).length) throw new Error('Not deleted: you do not have access to this item.'); };
   let withZ = true;
   const cols = () => withZ ? PERSON_COLS : PERSON_COLS_BASE;
   return {
@@ -751,7 +758,7 @@ function makeApi(url, key) {
     },
     async signOut() { ok(await sb.auth.signOut()); },
     async me(userId) {
-      return ok(await sb.from('team_members').select('id,full_name,role,photo_url')
+      return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
     async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on')); },
@@ -796,6 +803,17 @@ function makeApi(url, key) {
     async bulkUpdate(ids, patch) {
       return ok(await sb.from('people').update(patch).in('id', ids).select(cols()));
     },
+    async updatePerson(id, patch) { return ok(await sb.from('people').update(patch).eq('id', id).select(cols()).single()); },
+    async addPhone(personId, phone, label) { return ok(await sb.from('person_phones').insert({ person_id: personId, phone, label }).select('id,phone,label').single()); },
+    async updatePhone(id, patch) { return ok(await sb.from('person_phones').update(patch).eq('id', id).select('id,phone,label').single()); },
+    async deletePhone(id) { gone(await sb.from('person_phones').delete().eq('id', id).select('id')); },
+    async addEmail(personId, email, isRelay) { return ok(await sb.from('person_emails').insert({ person_id: personId, email, is_relay: isRelay }).select('id,email,is_relay').single()); },
+    async updateEmail(id, patch) { return ok(await sb.from('person_emails').update(patch).eq('id', id).select('id,email,is_relay').single()); },
+    async deleteEmail(id) { gone(await sb.from('person_emails').delete().eq('id', id).select('id')); },
+    async updateNote(id, body) { return ok(await sb.from('notes').update({ body }).eq('id', id).select(NOTE_COLS).single()); },
+    async deleteNote(id) { gone(await sb.from('notes').delete().eq('id', id).select('id')); },
+    async tags() { return ok(await sb.from('tags').select('name').order('name')); },
+    async settings() { return ok(await sb.from('team_settings').select('agents_create_tags').eq('id', 1).maybeSingle()); },
     async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
@@ -871,6 +889,7 @@ const state = {
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
   sel: new Set(), onlyIds: null, bulk: null, list: [], shownIds: [],
+  edit: null, lastEdit: null, tags: [], agentTags: false,
   view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
@@ -925,7 +944,7 @@ function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; r
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' || e.target.closest('[data-close]')) closeModal(); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (!$('#modal').hidden) closeModal(); else if (state.open) closePanel();
+  if (!$('#modal').hidden) closeModal(); else if (state.edit) { state.edit = null; renderPanel(); } else if (state.open) closePanel();
 });
 
 // ───────── Sign-in, boot and sign-out ─────────
@@ -964,7 +983,7 @@ function resetApp() {
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
   Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
-    onlyIds: null, bulk: null, list: [], shownIds: [],
+    onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
   inqCache.clear(); state.sel.clear();
   $('#search').value = '';
@@ -996,6 +1015,8 @@ async function start(session) {
   state.view = location.hash === '#people' ? 'people' : 'dash';
   renderMe(); renderFilters(); setChrome(true);
   loadPeople(myGen); loadAppts(); loadHits();
+  api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
+  api.settings().then(r => { if (myGen === loadGen) state.agentTags = !!(r && r.agents_create_tags); }).catch(() => {});
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
   if (!/^#p\//.test(location.hash) && /^#p\/[0-9a-f-]{36}$/i.test(back)) { try { history.replaceState(null, '', location.href.split('#')[0] + back); } catch (_) {} }
   route();
@@ -1093,11 +1114,12 @@ function syncZFilter() {
 function filtered() {
   const q = state.q.trim().toLowerCase();
   const qd = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';   // phone search only when the box holds just digits and punctuation
+  const ucut = state.unc ? notContactedSince() : 0;
   const out = all.filter(p => {
     if (state.onlyIds && !state.onlyIds.has(p.id)) return false;
     if (state.agent && p.owner_id !== state.agent) return false;
     if (state.stage && p.stage_id !== +state.stage) return false;
-    if (state.unc && (p.contacted_at || closes(p))) return false;
+    if (state.unc && (p.contacted_at || closes(p) || p._c < ucut)) return false;
     if (state.zOn && state.zacct && (state.zacct === '__none' ? p.zillow_account : p.zillow_account !== state.zacct)) return false;
     if (q && !(p._ls.includes(q) || (qd && p._dg.includes(qd)))) return false;
     return true;
@@ -1189,6 +1211,7 @@ function renderList() {
   $('#empty').hidden = n > 0 || state.loading;
   $('#more').hidden = n <= state.limit;
   $('#moreBtn').textContent = n - state.limit > SHOW ? `Show ${SHOW} more` : `Show ${n - state.limit} more`;
+  const ex = $('#exportShown'); ex.hidden = !(canExport() && n > 0 && state.sel.size === 0); ex.textContent = `Export ${n.toLocaleString('en-US')} shown`;
   renderBulk();
 }
 function resetPaging() { filterChanged(); }
@@ -1214,6 +1237,8 @@ $('#rows').addEventListener('change', onChange);
 // ───────── Selection and bulk edit (People) ─────────
 // Only leads where canEdit(p) is true change (pilot rule). One chunk of 100 ids at a time.
 const CHUNK = 100;
+const NOT_CONTACTED_DAYS = 30;   // "not contacted" counts only leads created in the last 30 local days
+const notContactedSince = () => +dayStart(-(NOT_CONTACTED_DAYS - 1));
 const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 const selPeople = () => [...state.sel].map(id => byId.get(id)).filter(Boolean);
 function filterChanged() { state.sel.clear(); state.onlyIds = null; state.limit = SHOW; renderList(); }
@@ -1237,6 +1262,7 @@ $('#checkAll').addEventListener('change', e => {
 
 function renderBulk() {
   const bar = $('#bulkbar'), b = state.bulk, n = state.sel.size;
+  { const ex = $('#exportShown'), m = (state.list || []).length; ex.hidden = !(canExport() && m > 0 && n === 0); ex.textContent = `Export ${m.toLocaleString('en-US')} shown`; }
   const shown = state.shownIds || [], nShown = shown.filter(id => state.sel.has(id)).length;
   const ca = $('#checkAll');
   ca.checked = shown.length > 0 && nShown === shown.length; ca.indeterminate = nShown > 0 && nShown < shown.length;
@@ -1249,7 +1275,7 @@ function renderBulk() {
       html += `<div class="bulkrow"><b class="num" id="bulkCount">${n.toLocaleString('en-US')} selected</b>
         <select class="btn small" id="bulkStage" aria-label="Change stage"><option value="">Change stage…</option>${state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
         <button class="btn small" id="bulkOn">Mark contacted</button><button class="btn small" id="bulkOff">Mark not contacted</button>
-        <button class="btn small" id="bulkClear">Clear</button>
+        ${canExport() ? '<button class="btn small" id="bulkExport">Export CSV</button>' : ''}<button class="btn small" id="bulkClear">Clear</button>
         ${allShown && n < matchN ? `<button class="btn small soft" id="selAll">Select all ${matchN.toLocaleString('en-US')} people that match</button>` : ''}</div>
         <div class="sub" id="bulkInfo">${ro === 0 ? `All ${ed.toLocaleString('en-US')} can change.` : `${ed.toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')} can change. ${ro.toLocaleString('en-US')} ${ro === 1 ? 'is an agent\'s lead' : 'are agents\' leads'} (read-only while FUB is their source).`}</div>`;
     }
@@ -1347,6 +1373,7 @@ $('#bulkbar').addEventListener('click', e => {
   const t = e.target;
   if (t.id === 'selAll') selectAllMatching();
   else if (t.id === 'bulkClear') { state.sel.clear(); syncSel(); }
+  else if (t.id === 'bulkExport') exportPeople((state.list || []).filter(p => state.sel.has(p.id)));
   else if (t.id === 'bulkOn') askBulk(planFor('contact', true));
   else if (t.id === 'bulkOff') askBulk(planFor('contact', false));
   else if (t.id === 'bulkRetry') continueBulk();
@@ -1359,6 +1386,40 @@ $('#bulkbar').addEventListener('change', e => {
   askBulk(planFor('stage', id));
 });
 $('#onlyClear').addEventListener('click', () => { state.onlyIds = null; state.limit = SHOW; renderList(); });
+
+// ───────── Export to CSV (built in the browser; no server) ─────────
+// Managers, and members with can_export. Read-only leads are exported too: export changes nothing.
+const canExport = () => !!state.me && (state.me.role === 'manager' || state.me.can_export === true);
+const csvSafe = (v) => { const s = String(v ?? ''); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };   // a leading = + - @ would run as a formula in a spreadsheet
+const csvCell = (v) => { const s = csvSafe(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+function fieldText(f, v) {
+  if (isBlank(v) && v !== false) return '';
+  switch (f.type) {
+    case 'daterange': return rangeText(v);
+    case 'multiselect': return Array.isArray(v) ? v.join('; ') : String(v);
+    case 'yesno': return v === true || v === 'true' ? 'Yes' : 'No';
+    default: return String(v);
+  }
+}
+function csvFor(people) {
+  const head = ['First name', 'Last name', 'Agent', 'Stage', 'Contacted', 'Source', 'Zillow account', 'Emails', 'Phones', 'Created', 'Last activity', ...state.fields.map(f => f.label)];
+  const rows = people.map(p => [p.first_name, p.last_name, p.owner_id ? memberName(p.owner_id) : '', stageOf(p) ? stageOf(p).name : '',
+    p.contacted_at ? localKey(p.contacted_at) : '', p.source, state.zOn ? p.zillow_account || '' : '',
+    (p.person_emails || []).map(e => e.email).join('; '), (p.person_phones || []).map(x => fmtPhone(x.phone)).join('; '),
+    p.created_at ? localKey(p.created_at) : '', p.last_activity_at ? localKey(p.last_activity_at) : '',
+    ...state.fields.map(f => fieldText(f, (p.custom || {})[f.key]))]);
+  return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+function downloadCsv(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function exportPeople(people) {
+  if (!canExport() || !people.length) return;
+  downloadCsv(`loopin-people-${localKey(Date.now())}.csv`, csvFor(people));
+}
+$('#exportShown').addEventListener('click', () => exportPeople(state.list || []));
 
 // ───────── Writes ─────────
 // One write at a time per person. The row changes only after the database answers.
@@ -1490,14 +1551,14 @@ function closePanel() {
   try { history.replaceState(null, '', location.href.split('#')[0] + '#' + state.view); } catch (_) {}
   hidePanel();
 }
-function closePanelQuiet() { state.open = null; state.detail = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
+function closePanelQuiet() { state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
 function hidePanel() { closePanelQuiet(); }
 $('#scrim').addEventListener('click', closePanel);
 $('#nav').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; go(b.dataset.view); window.scrollTo(0, 0); });
 
 async function showPanel(id) {
   if (state.open === id) return;
-  state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false;
+  state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false; state.edit = null; state.lastEdit = null;
   $('#panel').hidden = false; $('#scrim').hidden = false; document.documentElement.classList.add('noscroll');
   renderPanel();
   if (!byId.has(id) && !state.loading) ensureOpenRow(id);
@@ -1512,11 +1573,14 @@ async function showPanel(id) {
   }
   renderPanel();
 }
-function noteHtml(n) {
+const editbox = (inner, dis = '') => `<div class="editbox">${inner}<div class="err" id="editErr"></div><div class="row" style="justify-content:flex-end"><button class="btn small" data-editcancel ${dis}>Cancel</button><button class="btn small primary" data-editsave ${dis}>Save</button></div></div>`;
+function noteHtml(n, p) {
   const kind = String(n.kind || 'note').replace(/[^a-z_]/g, '');
   const label = { calendly: 'Calendly answers · ', text_log: 'Text logged · ', email: 'Email · ' }[kind] || '';
   const who = n.author_id ? (memberName(n.author_id) || 'Team member') : 'FUB';
-  return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}</div><pre>${esc(n.body)}</pre></div>`;
+  const can = p && canEdit(p) && canEditNote(n), dis = p && busy.has(p.id) ? 'disabled' : '';
+  if (can && state.edit === 'note:' + n.id) return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}</div>${editbox(`<textarea id="eNote" aria-label="Edit note">${esc(n.body)}</textarea>`, dis)}</div>`;
+  return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}${can ? ` <span class="spacer"></span><button class="pen" data-edit="note:${esc(n.id)}" aria-label="Edit note" ${dis}>${penSvg}</button><button class="pen" data-del="note" data-id="${esc(n.id)}" aria-label="Delete note" ${dis}>×</button>` : ''}</div><pre>${esc(n.body)}</pre></div>`;
 }
 function fieldValue(f, v) {
   if (isBlank(v) && v !== false) return '<span class="sub">—</span>';
@@ -1532,36 +1596,58 @@ function fieldValue(f, v) {
 function renderPanel() {
   const el = $('#panel');
   if (!state.open) return;
+  // Keep what the person has typed in an open editor across a redraw.
+  const snap = {};
+  if (state.edit && state.edit === state.lastEdit) el.querySelectorAll('.editbox input, .editbox select, .editbox textarea').forEach(x => { if (x.id) snap[x.id] = x.type === 'checkbox' ? x.checked : x.value; });
+  const chips = {};
+  if (state.edit && state.edit === state.lastEdit) el.querySelectorAll('.editbox .chip').forEach(c => { chips[(c.closest('[data-multi]') || {}).dataset ? c.closest('[data-multi]').dataset.multi + '|' + c.dataset.val : ''] = c.getAttribute('aria-pressed'); });
   const keep = $('#newNote') ? $('#newNote').value : state.draft;
   const hadFocus = document.activeElement && document.activeElement.id === 'newNote';
   const p = byId.get(state.open);
-  const head = (title) => `<div class="panel-head"><div class="row top"><h2>${title}</h2><button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>`;
+  const head = (title, raw) => `<div class="panel-head"><div class="row top">${raw || `<h2>${title}</h2>`}<button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>`;
   if (!p) {
     el.innerHTML = head(state.missing ? 'Not found' : 'Loading…') + `</div><div class="panel-body"><div class="${state.missing ? 'err-s' : 'loading-s'}">${state.missing ? 'This person could not be found, or you do not have access.' : 'Loading…'}</div></div>`;
     $('#closePanel').onclick = closePanel; return;
   }
   const ph = p.person_phones || [], em = p.person_emails || [];
   const d = state.detail;
+  const can = canEdit(p), dis = busy.has(p.id) ? 'disabled' : '';
+  const pen = (k, label) => can ? `<button class="pen" data-edit="${esc(k)}" aria-label="${esc(label)}" ${dis}>${penSvg}</button>` : '';
+  const del = (k, id, label) => can ? `<button class="pen" data-del="${k}" data-id="${esc(id)}" aria-label="${esc(label)}" ${dis}>×</button>` : '';
+  const addBtn = (k, label) => can ? `<div class="vrow"><button class="btn small soft" data-edit="${k}" ${dis}>${label}</button></div>` : '';
+  const phoneEd = (x) => editbox(`<div class="edrow"><input id="ePhone" value="${esc(x ? fmtPhone(x.phone) : '')}" placeholder="10-digit US number" aria-label="Phone number" inputmode="tel"><select id="eLabel" aria-label="Label">${PHONE_LABELS.map(l => `<option ${((x && x.label) || 'Mobile') === l ? 'selected' : ''}>${l}</option>`).join('')}</select><span></span></div>`, dis);
+  const emailEd = (x) => editbox(`<div class="edrow nolabel"><input id="eEmail" value="${esc(x ? x.email : '')}" placeholder="name@example.com" aria-label="Email address" type="email"><span></span></div>`, dis);
   const contact = `<div class="section"><h4>Contact</h4>
-    ${ph.map(x => `<div class="vrow"><span class="vic">${phoneSvg}</span><a class="val maillink num" href="${esc(telHref(x.phone))}">${esc(fmtPhone(x.phone))}</a>${x.label ? `<span class="sub">${esc(x.label)}</span>` : ''}</div>`).join('') || '<div class="vrow"><span class="sub">No phone number yet.</span></div>'}
-    ${em.map(x => `<div class="vrow"><span class="vic">${mailSvg}</span><a class="val maillink" href="mailto:${esc(x.email)}">${esc(x.email)}</a>${x.is_relay ? '<span class="pill info">Zillow relay</span>' : ''}</div>`).join('') || '<div class="vrow"><span class="sub">No email yet.</span></div>'}</div>`;
-  const tags = (p.tags || []).length ? `<span class="tags">${p.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="sub">—</span>';
+    ${ph.map(x => state.edit === 'phone:' + x.id ? phoneEd(x) : `<div class="vrow"><span class="vic">${phoneSvg}</span><a class="val maillink num" href="${esc(telHref(x.phone))}">${esc(fmtPhone(x.phone))}</a>${x.label ? `<span class="sub">${esc(x.label)}</span>` : ''}<span class="spacer"></span>${pen('phone:' + x.id, 'Edit phone number')}${del('phone', x.id, 'Remove phone number')}</div>`).join('') || '<div class="vrow"><span class="sub">No phone number yet.</span></div>'}
+    ${state.edit === 'phone:new' ? phoneEd(null) : addBtn('phone:new', '+ Add phone')}
+    ${em.map(x => state.edit === 'email:' + x.id ? emailEd(x) : `<div class="vrow"><span class="vic">${mailSvg}</span><a class="val maillink" href="mailto:${esc(x.email)}">${esc(x.email)}</a>${x.is_relay ? '<span class="pill info">Zillow relay</span>' : ''}<span class="spacer"></span>${x.is_relay ? '' : pen('email:' + x.id, 'Edit email')}${del('email', x.id, 'Remove email')}</div>`).join('') || '<div class="vrow"><span class="sub">No email yet.</span></div>'}
+    ${state.edit === 'email:new' ? emailEd(null) : addBtn('email:new', '+ Add email')}</div>`;
+  const tags = `<span class="tags">${(p.tags || []).map(t => `<span class="tag">${esc(t)}${can ? `<button data-tagrm="${esc(t)}" aria-label="Remove tag ${esc(t)}" ${dis}>×</button>` : ''}</span>`).join('')}</span>${(p.tags || []).length || can ? '' : '<span class="sub">—</span>'}`
+    + (can ? `<input class="tagadd" id="tagAdd" list="tagList" placeholder="+ Add tag" aria-label="Add a tag" ${dis}><datalist id="tagList">${state.tags.map(t => `<option value="${esc(t)}">`).join('')}</datalist><button class="btn small" data-tagadd ${dis}>Add</button>` : '');
+  const nwNow = stageOf(p) && stageOf(p).is_nonworkable;
+  const reasonEd = state.edit === 'reason' ? editbox(`<select id="eReason" aria-label="Reason"><option value="">Choose…</option>${Object.entries(REASONS).map(([k, t]) => `<option value="${k}" ${p.nonworkable_reason === k ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`, dis) : '';
   const details = `<div class="section"><h4>Details</h4>
-    <div class="dvals"><span class="dlabel">Stage</span><span class="dval">${stageSelect(p, 'Stage')}${p.nonworkable_reason ? ` <span class="pill bad">${esc(REASONS[p.nonworkable_reason] || p.nonworkable_reason)}</span>` : ''}</span></div>
-    <div class="dvals"><span class="dlabel">Tags</span><span class="dval">${tags}</span></div>
-    ${state.zOn && p.zillow_account ? `<div class="dvals" id="zRow"><span class="dlabel">Zillow account</span><span class="dval" title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span></div>` : ''}
-    ${state.fields.map(f => `<div class="dvals"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}</span></div>`).join('')}</div>`;
+    <div class="dvals"><span class="dlabel">Stage</span><span class="dval">${stageSelect(p, 'Stage')}${p.nonworkable_reason ? ` <span class="pill bad">${esc(REASONS[p.nonworkable_reason] || p.nonworkable_reason)}</span>` : ''}</span>${nwNow ? pen('reason', 'Change reason') : '<span></span>'}</div>
+    ${reasonEd}
+    <div class="dvals"><span class="dlabel">Tags</span><span class="dval tagrow">${tags}</span><span></span></div>
+    ${state.zOn && p.zillow_account ? `<div class="dvals" id="zRow"><span class="dlabel">Zillow account</span><span class="dval" title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span><span></span></div>` : ''}
+    ${state.fields.map(f => state.edit === 'field:' + f.key
+      ? `<div class="dvals" data-field="${esc(f.key)}" style="display:block"><div class="field"><label>${esc(f.label)}${f.required_for_nonworkable ? ' <span class="req" title="Required before Non-workable">*</span>' : ''}</label>${editbox(fieldInput(f, (p.custom || {})[f.key]), dis)}</div></div>`
+      : `<div class="dvals" data-field="${esc(f.key)}"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}</span>${pen('field:' + f.key, 'Edit ' + f.label)}</div>`).join('')}</div>`;
   let inq, notes;
   if (state.detailErr) { inq = notes = `<div class="err-s">${esc(state.detailErr)}</div>`; }
   else if (!d) { inq = notes = '<div class="loading-s">Loading…</div>'; }
   else {
     inq = d.inquiries.map(i => `<div class="inq"><div><b>${esc(i.listing_address || 'No listing')}</b>${i.listing_price != null ? ` <span class="sub num">${esc(money(i.listing_price))}/mo</span>` : ''}</div><div class="sub">${esc(fmtShort(i.received_at))} · ${esc(i.source)}</div>${i.message ? `<div>${esc(i.message)}</div>` : ''}</div>`).join('') || '<div class="sub">None</div>';
     const box = canEdit(p) ? `<div class="notebox"><textarea id="newNote" placeholder="Add a note" aria-label="Add a note"></textarea><div class="row"><button class="btn small primary" id="saveNote" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Save</button></div></div>` : '';
-    notes = box + `<div class="timeline">${d.notes.map(noteHtml).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
+    notes = box + `<div class="timeline">${d.notes.map(n => noteHtml(n, p)).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
   }
   const on = isContacted(p);
   const by = firstName(p.contacted_by);
-  el.innerHTML = head(esc(p._name || '(no name)')) + `
+  const titleHtml = state.edit === 'name' && can
+    ? editbox(`<div class="edrow nolabel"><input id="eFirst" value="${esc(p.first_name)}" placeholder="First name" aria-label="First name"></div><div class="edrow nolabel"><input id="eLast" value="${esc(p.last_name)}" placeholder="Last name" aria-label="Last name"></div>`, dis)
+    : `<h2>${esc(p._name || '(no name)')}${pen('name', 'Edit name')}</h2>`;
+  el.innerHTML = head('', titleHtml) + `
       <div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>
       <span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>
     </div>
@@ -1569,11 +1655,134 @@ function renderPanel() {
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
   $('#closePanel').onclick = closePanel;
+  for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x) { if (x.type === 'checkbox') x.checked = v; else x.value = v; } }
+  el.querySelectorAll('.editbox .chip').forEach(c => { const k = c.closest('[data-multi]').dataset.multi + '|' + c.dataset.val; if (k in chips) c.setAttribute('aria-pressed', chips[k]); });
+  state.lastEdit = state.edit;
   const ta = $('#newNote');
   if (ta) { ta.value = keep || ''; ta.oninput = () => { state.draft = ta.value; }; if (hadFocus) ta.focus(); }
   if ($('#saveNote')) $('#saveNote').onclick = saveNote;
 }
 $('#panel').addEventListener('change', onChange);
+
+// ───────── Person editing (only on leads where canEdit(p)) ─────────
+const penSvg = '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m13.5 6.5 4 4" stroke="currentColor" stroke-width="1.8"/></svg>';
+const PHONE_LABELS = ['Mobile', 'Home', 'Work', 'Other'];
+// Turn what people type into +1XXXXXXXXXX (the database wants E.164). Returns '' when it is not a US number.
+function normPhone(s) {
+  const t = String(s || '').trim();
+  if (/[a-z]/i.test(t)) return '';
+  const d = t.replace(/\D/g, '');
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d[0] === '1') return '+' + d;
+  return '';
+}
+const normEmail = (s) => String(s || '').trim().toLowerCase();
+const EMAIL_OK = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const canEditNote = (n) => state.me && (state.me.role === 'manager' || (n.author_id && n.author_id === state.me.id));
+
+// One write at a time per lead. The controls are disabled while it runs; the person row is re-read after.
+async function editWrite(p, fn) {
+  if (!p || !canEdit(p)) { toast(p ? readOnlyWhy(p) : 'This person is not loaded.'); return false; }
+  if (busy.has(p.id)) return false;
+  busy.add(p.id); renderPanel(); renderList();
+  let ok = true;
+  try { const r = await fn(); if (r && r.first_name !== undefined) setRow(r); await reread(p.id); }
+  catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
+  busy.delete(p.id); refresh();   // the lead stays locked until the re-read is done
+  return ok;
+}
+function setEdit(k) { state.edit = k; renderPanel(); const f = $('#panel .editbox input, #panel .editbox select, #panel .editbox textarea'); if (f) f.focus(); }
+function editErr(m) { const e = $('#editErr'); if (e) e.textContent = m; }
+
+async function saveEdit() {
+  const p = byId.get(state.open), k = state.edit; if (!p || !k) return;
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); return; }
+  const [kind, arg] = [k.split(':')[0], k.slice(k.indexOf(':') + 1)];
+  const done = (ok) => { if (ok) { state.edit = null; renderPanel(); } };
+  if (kind === 'name') {
+    const first = $('#eFirst').value.trim(), last = $('#eLast').value.trim();
+    if (!first) return editErr('First name is required.');
+    return done(await editWrite(p, () => api.updatePerson(p.id, { first_name: first, last_name: last })));
+  }
+  if (kind === 'phone') {
+    const num = normPhone($('#ePhone').value), label = $('#eLabel').value;
+    if (!num) return editErr('Enter a 10-digit US number.');
+    if ((p.person_phones || []).some(x => x.phone === num && String(x.id) !== arg)) return editErr('That number is already on this lead.');
+    return done(await editWrite(p, () => arg === 'new' ? api.addPhone(p.id, num, label) : api.updatePhone(+arg, { phone: num, label })));
+  }
+  if (kind === 'email') {
+    const em = normEmail($('#eEmail').value);
+    if (!EMAIL_OK.test(em)) return editErr('Enter an email like name@example.com.');
+    if ((p.person_emails || []).some(x => x.email === em && String(x.id) !== arg)) return editErr('That email is already on this lead.');
+    return done(await editWrite(p, () => arg === 'new' ? api.addEmail(p.id, em, /@convo\.zillow\.com$/.test(em)) : api.updateEmail(+arg, { email: em })));
+  }
+  if (kind === 'field') {
+    const f = state.fields.find(x => x.key === arg); if (!f) return;
+    const v = readField(f, $('#panel')), blank = isBlank(v) && v !== false;
+    const st = stageOf(p);
+    if (blank && f.required_for_nonworkable && st && st.is_nonworkable) return editErr('Required while the lead is Non-workable.');
+    const merged = { ...(p.custom || {}) };
+    if (blank) delete merged[f.key]; else merged[f.key] = v;
+    return done(await editWrite(p, () => api.updatePerson(p.id, { custom: merged })));
+  }
+  if (kind === 'reason') {
+    const r = $('#eReason').value; if (!r) return editErr('Pick a reason.');
+    return done(await editWrite(p, () => api.updatePerson(p.id, { nonworkable_reason: r })));
+  }
+  if (kind === 'note') {
+    const body = $('#eNote').value.trim(), n = state.detail && state.detail.notes.find(x => String(x.id) === arg);
+    if (!n || !canEditNote(n)) { toast('You can only change your own notes.'); return; }
+    if (!body) return editErr('Write the note first.');
+    return done(await editWrite(p, async () => { const r = await api.updateNote(n.id, body); Object.assign(n, r); }));
+  }
+}
+function askDelete(kind, id) {
+  const p = byId.get(state.open); if (!p) return;
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); return; }
+  const fub = p.fub_id != null;
+  const what = kind === 'phone' ? 'number' : kind === 'email' ? 'email' : 'note';
+  const text = kind === 'note' ? 'Delete this note?' : `Remove this ${what}?${fub ? ' While FUB is still in use, the nightly sync adds it back if FUB has it.' : ''}`;
+  if (kind === 'note') { const n = state.detail && state.detail.notes.find(x => String(x.id) === id); if (!n || !canEditNote(n)) { toast('You can only change your own notes.'); return; } }
+  showModal(`<h3 id="delText">${esc(text)}</h3><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="delGo">${kind === 'note' ? 'Delete' : 'Remove'}</button></div>`);
+  $('#delGo').onclick = async () => {
+    closeModal();
+    await editWrite(p, async () => {
+      if (kind === 'phone') await api.deletePhone(+id);
+      else if (kind === 'email') await api.deleteEmail(+id);
+      else { await api.deleteNote(id); state.detail.notes = state.detail.notes.filter(x => String(x.id) !== id); }
+    });
+  };
+}
+async function addTag() {
+  const p = byId.get(state.open), inp = $('#tagAdd'); if (!p || !inp) return;
+  let v = inp.value.trim(); if (!v) return;
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); return; }
+  const known = state.tags.find(t => t.toLowerCase() === v.toLowerCase());
+  if (known) v = known;
+  if ((p.tags || []).some(t => t.toLowerCase() === v.toLowerCase())) { toast('That tag is already on this lead.'); return; }
+  if (!known && state.me.role !== 'manager' && !state.agentTags) { toast('Pick a tag from the list. Only the manager can add new tags.'); return; }
+  const ok = await editWrite(p, () => api.updatePerson(p.id, { tags: [...(p.tags || []), v] }));
+  if (ok && !known) { state.tags.push(v); state.tags.sort((a, b) => a.localeCompare(b)); renderPanel(); }
+  if (ok && $('#tagAdd')) $('#tagAdd').value = '';
+}
+async function removeTag(t) {
+  const p = byId.get(state.open); if (!p) return;
+  await editWrite(p, () => api.updatePerson(p.id, { tags: (p.tags || []).filter(x => x !== t) }));
+}
+$('#panel').addEventListener('click', e => {
+  const t = e.target;
+  const ed = t.closest('[data-edit]'); if (ed) { if (!ed.disabled) setEdit(ed.dataset.edit); return; }
+  if (t.closest('[data-editcancel]')) { state.edit = null; renderPanel(); return; }
+  if (t.closest('[data-editsave]')) { saveEdit(); return; }
+  const dl = t.closest('[data-del]'); if (dl) { if (!dl.disabled) askDelete(dl.dataset.del, dl.dataset.id); return; }
+  const tr = t.closest('[data-tagrm]'); if (tr) { if (!tr.disabled) removeTag(tr.dataset.tagrm); return; }
+  if (t.closest('[data-tagadd]')) addTag();
+});
+$('#panel').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  if (e.target.id === 'tagAdd') { e.preventDefault(); addTag(); }
+  else if (e.target.matches('.editbox input')) { e.preventDefault(); saveEdit(); }
+});
 
 async function saveNote() {
   const id = state.open, body = ($('#newNote') ? $('#newNote').value : '').trim();
@@ -1627,7 +1836,7 @@ async function loadHits() {
 
 function renderDash() {
   if (!state.me) return;
-  const t0 = +dayStart(0), t1 = +dayStart(1), t8 = +dayStart(8), w0 = +dayStart(-6), lw0 = +dayStart(-13);
+  const t0 = +dayStart(0), t1 = +dayStart(1), t8 = +dayStart(8), w0 = +dayStart(-6), lw0 = +dayStart(-13), tUnc = notContactedSince();
   let newToday = 0, newWeek = 0, lastWeek = 0;
   const waiting = [], src = new Map(), per = new Map(), due = [];
   const slot = (id) => { if (!per.has(id)) per.set(id, { week: 0, unc: 0 }); return per.get(id); };
@@ -1636,7 +1845,7 @@ function renderDash() {
     if (c >= t0 && c < t1) newToday++;
     if (c >= w0 && c < t1) { newWeek++; slot(p.owner_id).week++; const k = (p.source || '').trim() || 'Unknown'; src.set(k, (src.get(k) || 0) + 1); }
     else if (c >= lw0 && c < w0) lastWeek++;
-    if (!p.contacted_at && !(st && st.closes_lead)) { waiting.push(p); slot(p.owner_id).unc++; }
+    if (!p.contacted_at && !(st && st.closes_lead) && c >= tUnc) { waiting.push(p); slot(p.owner_id).unc++; }
     if (st && st.is_nonworkable && p.nonworkable_reason === 'future_move_in') {
       const mv = (p.custom || {}).move_in_date, d = dateOnly(mv && typeof mv === 'object' ? mv.from : '');
       if (d) {
@@ -1663,7 +1872,7 @@ function renderDash() {
     : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
   const tiles = `<div class="tiles">
     ${tile('Team new leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
-    ${tile('Team not contacted', waiting.length.toLocaleString('en-US'), 'new leads not contacted yet', 'unc', waiting.length ? 'alert' : '')}
+    ${tile('Team not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
     ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
   </div>`;
