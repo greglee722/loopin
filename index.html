@@ -630,6 +630,11 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 @media (min-width: 861px) { #view-people table { min-width: 1060px; } }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
+.bar > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zrow .sub { padding-left: 128px; margin-top: -2px; } .zrow.zwarn .sub { padding-left: 0; }
+.zrow.zwarn { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bars .zrow { display: grid; gap: 2px; }
+.bars .zrow.zwarn { display: flex; }
 .tile.alert .v { color: var(--bad); }
 .tile.static { cursor: default; } .tile.static:hover { border-color: var(--line); }
 .dash-head .loadline { flex-basis: 100%; }
@@ -686,6 +691,7 @@ th.num-col button { white-space: nowrap; }
     <div class="toolbar" id="toolbar">
       <select class="btn" id="fAgent" aria-label="Agent" hidden></select>
       <select class="btn" id="fStage" aria-label="Stage"></select>
+      <select class="btn" id="fZ" aria-label="Zillow account"></select>
       <button class="btn" id="fUnc" aria-pressed="false">Not contacted yet</button>
       <div class="spacer"></div>
       <div class="countline"><span id="count" aria-live="polite"></span><span class="loadmsg" id="loadmsg"></span></div>
@@ -693,7 +699,7 @@ th.num-col button { white-space: nowrap; }
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th class="c-name">Name</th><th>Contacted</th><th>Agent</th><th>Phone</th><th>Email</th><th>Stage</th><th>Source</th>
+          <th class="c-name">Name</th><th>Contacted</th><th>Agent</th><th>Phone</th><th>Email</th><th>Stage</th><th>Source</th><th id="thZ">Zillow account</th>
           <th class="num-col" id="thCreated" aria-sort="descending"><button class="sortbtn" data-sort="created">Created</button></th>
           <th class="num-col" id="thActivity" aria-sort="none"><button class="sortbtn" data-sort="activity">Last activity</button></th>
         </tr></thead>
@@ -719,13 +725,17 @@ const SUPABASE_URL = 'https://qxzdwpzhpubcufhvjwjk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publishable: safe in public code
 
 // The columns one list row needs. Writes ask for the same columns back.
-const PERSON_COLS = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(email,is_relay),person_phones(phone,label)';
+const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(email,is_relay),person_phones(phone,label)';
+const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 
 // Every function returns data or throws an Error with the database message.
 function makeApi(url, key) {
   const sb = window.supabase.createClient(url, key);
-  const ok = (r) => { if (r.error) throw new Error(r.error.message); return r.data; };
+  const ok = (r) => { if (r.error) throw Object.assign(new Error(r.error.message), { code: r.error.code }); return r.data; };
+  // Until the zillow_account column exists, the app asks for the columns without it (see setZillow).
+  let withZ = true;
+  const cols = () => withZ ? PERSON_COLS : PERSON_COLS_BASE;
   return {
     async session() { return ok(await sb.auth.getSession()).session; },
     onAuth(cb) { sb.auth.onAuthStateChange((event, session) => cb(event, session)); },
@@ -748,14 +758,14 @@ function makeApi(url, key) {
     // Keyset paging: `after` is null (first page) or { created_at, id } of the last row received.
     // Returns { rows, count }. count is only asked for on the first page.
     async peoplePage(after) {
-      let q = sb.from('people').select(PERSON_COLS, after ? undefined : { count: 'exact' })
+      let q = sb.from('people').select(cols(), after ? undefined : { count: 'exact' })
         .is('merged_into', null).order('created_at', { ascending: false }).order('id', { ascending: true }).limit(PAGE);
       if (after) {
         const ts = `"${after.created_at}"`;   // quoted so "+00:00" survives the filter string
         q = q.or(`created_at.lt.${ts},and(created_at.eq.${ts},id.gt.${after.id})`);
       }
       const r = await q;
-      if (r.error) throw new Error(r.error.message);
+      if (r.error) throw Object.assign(new Error(r.error.message), { code: r.error.code });
       return { rows: r.data, count: r.count == null ? null : r.count };
     },
     async person(id) {
@@ -774,13 +784,14 @@ function makeApi(url, key) {
     async hitLists() {
       return ok(await sb.from('hit_list').select('person_id,member_id,position,next_step,added_at').order('member_id').order('position'));
     },
-    async row(id) { return ok(await sb.from('people').select(PERSON_COLS).eq('id', id).maybeSingle()); },
+    setZillow(on) { withZ = !!on; },
+    async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
-        .eq('id', id).select(PERSON_COLS).single());
+        .eq('id', id).select(cols()).single());
     },
     async setStage(id, stageId, extra) {
-      return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(PERSON_COLS).single());
+      return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(cols()).single());
     },
     async addNote(personId, meId, body) {
       return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: 'note', body }).select(NOTE_COLS).single());
@@ -844,7 +855,7 @@ const state = {
   userId: null, user: null, me: null,
   team: [], teamMap: new Map(), colors: new Map(),
   stages: [], stageMap: new Map(), fields: [],
-  q: '', agent: '', stage: '', unc: false,
+  q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '',
   sort: { key: 'created', dir: 'desc' }, limit: SHOW,
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
@@ -872,6 +883,8 @@ function setRow(r) {
   if (idx.has(r.id)) all[idx.get(r.id)] = r; else { idx.set(r.id, all.length); all.push(r); }
   byId.set(r.id, r);
 }
+const zLocal = (a) => String(a || '').split('@')[0];
+const isMissingZ = (e) => !!e && (e.code === '42703' || /zillow_account/i.test(e.message || ''));
 const stageOf = (p) => state.stageMap.get(p.stage_id);
 const closes = (p) => !!(stageOf(p) && stageOf(p).closes_lead);
 const memberName = (id) => { const m = state.teamMap.get(id); return m ? m.full_name : ''; };
@@ -937,7 +950,7 @@ async function doSignOut() {
 function resetApp() {
   loadGen++;
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
-  Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, limit: SHOW,
+  Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
   inqCache.clear();
@@ -983,12 +996,22 @@ function renderMe() {
 // ───────── Loading people ─────────
 // One request at a time: each page needs the cursor from the one before. `after` lets a retry
 // continue from the last good page.
+// If the people query fails because zillow_account does not exist yet, retry once without it and hide the Zillow account UI.
+async function pageCall(after) {
+  try { return await api.peoplePage(after); }
+  catch (e) {
+    if (!state.zOn || !isMissingZ(e)) throw e;
+    state.zOn = false; state.zacct = ''; api.setZillow(false); applyZ();
+    return await api.peoplePage(after);
+  }
+}
+function applyZ() { $('#thZ').hidden = !state.zOn; $('#fZ').hidden = !state.zOn; }
 async function loadPeople(gen, after = null) {
   state.loading = true; state.loadFailed = false; state.loadErr = '';
   renderLoad();
   try {
     for (;;) {
-      const r = await api.peoplePage(after);
+      const r = await pageCall(after);
       if (gen !== loadGen) return;
       if (!after) state.total = r.count == null ? r.rows.length : r.count;
       r.rows.forEach(setRow);
@@ -1042,6 +1065,17 @@ function renderFilters() {
   $('#fStage').innerHTML = `<option value="">Any stage</option>` + state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   $('#fStage').value = state.stage;
   $('#fUnc').setAttribute('aria-pressed', String(state.unc));
+  applyZ(); state.zSig = ''; syncZFilter();
+}
+// The account menu lists every account seen in the loaded people (sorted), so a new account appears by itself.
+function syncZFilter() {
+  if (!state.zOn) return;
+  const set = new Set(); for (const p of all) if (p.zillow_account) set.add(p.zillow_account);
+  const list = [...set].sort(), sig = list.join('\n');
+  if (sig === state.zSig) return;
+  state.zSig = sig;
+  $('#fZ').innerHTML = `<option value="">Any account</option>` + list.map(a => `<option value="${esc(a)}" title="${esc(a)}">${esc(zLocal(a))}</option>`).join('') + `<option value="__none">No account</option>`;
+  $('#fZ').value = state.zacct;
 }
 function filtered() {
   const q = state.q.trim().toLowerCase();
@@ -1050,6 +1084,7 @@ function filtered() {
     if (state.agent && p.owner_id !== state.agent) return false;
     if (state.stage && p.stage_id !== +state.stage) return false;
     if (state.unc && (p.contacted_at || closes(p))) return false;
+    if (state.zOn && state.zacct && (state.zacct === '__none' ? p.zillow_account : p.zillow_account !== state.zacct)) return false;
     if (q && !(p._ls.includes(q) || (qd && p._dg.includes(qd)))) return false;
     return true;
   });
@@ -1099,6 +1134,7 @@ function personCard(p) {
     <div class="pc-main">
       <div class="pc-top">${isContacted(p) ? '' : '<span class="dot" aria-label="Not contacted yet"></span>'}<span class="name">${esc(p._name || '(no name)')}</span></div>
       <div class="sub">${esc(p.source)} · ${esc(rel(p.last_activity_at))}</div>
+      ${state.zOn && p.zillow_account ? `<div class="sub" title="${esc(p.zillow_account)}">Zillow: ${esc(zLocal(p.zillow_account))}</div>` : ''}
       ${ph || em ? `<div class="pc-meta">${ph ? `<a class="maillink" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a>` : ''}${em ? `<a class="maillink pc-email" href="mailto:${esc(em.email)}">${esc(em.email)}</a>` : ''}</div>` : ''}
       <div class="pc-foot">${contactedBox(p, false)}${owner}<span class="stagepill">${esc(stg ? stg.name : '')}</span></div>
     </div></div>`;
@@ -1113,6 +1149,7 @@ function rowHtml(p) {
     <td>${em ? `<a class="email maillink" href="mailto:${esc(em.email)}" title="${esc(em.email)}">${esc(em.email)}</a>${em.is_relay ? ' <span class="pill info">Zillow relay</span>' : ''}` : '<span class="sub">none</span>'}</td>
     <td>${stageSelect(p, 'Stage for ' + (p._name || 'this person'))}</td>
     <td>${esc(p.source)}</td>
+    ${state.zOn ? `<td>${p.zillow_account ? `<span title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span>` : '<span class="sub">—</span>'}</td>` : ''}
     <td><span class="num">${esc(fmtShort(p.created_at))}</span></td>
     <td><span class="num" title="${esc(fmtShort(p.last_activity_at))}">${esc(rel(p.last_activity_at))}</span></td>
     <td class="c-card">${personCard(p)}</td></tr>`;
@@ -1120,6 +1157,7 @@ function rowHtml(p) {
 function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
+  syncZFilter();
   const list = filtered(), n = list.length;
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
   for (const [id, key] of [['#thCreated', 'created'], ['#thActivity', 'activity']]) {
@@ -1136,6 +1174,7 @@ function resetPaging() { state.limit = SHOW; renderList(); }
 
 $('#search').addEventListener('input', e => { state.q = e.target.value; state.limit = SHOW; if (state.view === 'dash') go('people'); else renderList(); });
 $('#fAgent').addEventListener('change', e => { state.agent = e.target.value; resetPaging(); });
+$('#fZ').addEventListener('change', e => { state.zacct = e.target.value; resetPaging(); });
 $('#fStage').addEventListener('change', e => { state.stage = e.target.value; resetPaging(); });
 $('#fUnc').addEventListener('click', () => { state.unc = !state.unc; $('#fUnc').setAttribute('aria-pressed', String(state.unc)); resetPaging(); });
 $('#moreBtn').addEventListener('click', () => { state.limit += SHOW; renderList(); });
@@ -1339,6 +1378,7 @@ function renderPanel() {
   const details = `<div class="section"><h4>Details</h4>
     <div class="dvals"><span class="dlabel">Stage</span><span class="dval">${stageSelect(p, 'Stage')}${p.nonworkable_reason ? ` <span class="pill bad">${esc(REASONS[p.nonworkable_reason] || p.nonworkable_reason)}</span>` : ''}</span></div>
     <div class="dvals"><span class="dlabel">Tags</span><span class="dval">${tags}</span></div>
+    ${state.zOn && p.zillow_account ? `<div class="dvals" id="zRow"><span class="dlabel">Zillow account</span><span class="dval" title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span></div>` : ''}
     ${state.fields.map(f => `<div class="dvals"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}</span></div>`).join('')}</div>`;
   let inq, notes;
   if (state.detailErr) { inq = notes = `<div class="err-s">${esc(state.detailErr)}</div>`; }
@@ -1517,17 +1557,37 @@ function renderDash() {
   const mx = Math.max(1, ...top.map(r => r[1]));
   const sources = `<section class="card"><h2>Leads by source, this week</h2>${top.length ? `<div class="bars">${top.map(([n, c]) => `<div class="bar"><span>${esc(n)}</span><span class="track"><span class="fill" style="width:${c / mx * 100}%"></span></span><span class="num">${c}</span></div>`).join('')}</div>` : '<div class="empty-s">No new leads this week.</div>'}</section>`;
 
+  // Leads by Zillow account, this week (from the loaded people; no extra request)
+  let zsec = '';
+  if (state.zOn) {
+    const acc = new Map();
+    for (const p of all) {
+      if (!p.zillow_account) continue;
+      const a = acc.get(p.zillow_account) || { week: 0, last: 0 }; acc.set(p.zillow_account, a);
+      if (p._c >= w0 && p._c < t1) a.week++;
+      if (p._c > a.last) a.last = p._c;
+    }
+    const t30 = +dayStart(-29);
+    const lastTxt = (a) => 'last lead ' + fmtMonthDay(new Date(a.last));
+    const live = [...acc.entries()].filter(([, a]) => a.week > 0).sort((x, y) => y[1].week - x[1].week || (x[0] < y[0] ? -1 : 1));
+    const quiet = [...acc.entries()].filter(([, a]) => a.week === 0 && a.last >= t30).sort((x, y) => y[1].last - x[1].last);
+    const zmx = Math.max(1, ...live.map(([, a]) => a.week));
+    zsec = `<section class="card" id="dash-zillow"><h2>Leads by Zillow account, this week</h2>${live.length || quiet.length
+      ? `<div class="bars">${live.map(([n, a]) => `<div class="zrow"><div class="bar"><span title="${esc(n)}">${esc(zLocal(n))}</span><span class="track"><span class="fill" style="width:${a.week / zmx * 100}%"></span></span><span class="num">${a.week}</span></div><div class="sub">${esc(lastTxt(a))}</div></div>`).join('')}${quiet.map(([n, a]) => `<div class="zrow zwarn"><span class="pill warn" title="${esc(n)}">${esc(zLocal(n))}</span> <span class="sub">0 this week · ${esc(lastTxt(a))}</span></div>`).join('')}</div>`
+      : `<div class="empty-s">${acc.size ? 'No Zillow leads in the last 30 days.' : 'No Zillow account data yet.'}</div>`}</section>`;
+  }
+
   // Needs a look: move-in reminders
   const look = `<section class="card" id="dash-look"><h2>Needs a look</h2>
     ${due.map(({ p, d, days }) => `<div class="li"><span class="dot off" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">Moves in ${esc(fmtMonthDay(d))}, ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}. Reach back out.</div></div><span class="sub">${who(p.owner_id)}</span></div>`).join('') || '<div class="empty-s">All clear.</div>'}</section>`;
 
-  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${look}</div></div>`;
+  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>`;
 }
 
 // Open People with these filters set. Sorted by Created, newest first.
 function peopleWith(o = {}) {
   state.q = ''; $('#search').value = '';
-  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc;
+  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc; state.zacct = '';
   state.sort = { key: 'created', dir: 'desc' }; state.limit = SHOW;
   renderFilters();
   go('people');
