@@ -2487,6 +2487,8 @@ function pageMine(S) {
 // Email templates
 const tplDraftOf = (r) => ({ id: r.id, isNew: false, name: r.name || '', subject: r.subject || '', body_html: r.body_html || '', owner_id: r.owner_id || null, fub_id: r.fub_id || null });
 const tplSig = (d) => JSON.stringify([d.name, d.subject, d.body_html]);
+// A message typed as plain text (no HTML tags) becomes HTML paragraphs, so its line breaks survive in the email.
+const asHtml = (s) => /<\/?(p|br|div|span|a|b|i|u|strong|em|font|ul|ol|li|table|tbody|tr|td|th|h[1-6]|img|hr|blockquote|center)\b[^>]*>|<!--/i.test(s) || !String(s).trim() ? s : String(s).trim().split(/\r?\n\s*\r?\n/).map(par => `<p>${esc(par.trim()).replace(/\r?\n/g, '<br>')}</p>`).join('\n');
 const tplDirty = () => { const T = state.set.tpl; return !!(T && T.draft && !T.draft.owner_id && tplSig(T.draft) !== T.base); };
 function tplList(T) {
   const q = T.q.trim().toLowerCase();
@@ -2517,7 +2519,7 @@ function unfilled(txt) {
 }
 const prevPerson = (T) => byId.get(T.prevId) || all[0] || null;
 function previewHtml(T) {
-  const d = T.draft, p = prevPerson(T), m = selfRow(), subj = fillTokens(d.subject, p, m, String), body = fillTokens(d.body_html, p, m, esc), miss = unfilled(d.subject + '\n' + d.body_html);
+  const d = T.draft, p = prevPerson(T), m = selfRow(), subj = fillTokens(d.subject, p, m, String), body = fillTokens(asHtml(d.body_html), p, m, esc), miss = unfilled(d.subject + '\n' + d.body_html);
   const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'"><style>body{margin:12px;font:14px/1.5 -apple-system,Segoe UI,Arial,sans-serif;color:#222;background:#fff}img{max-width:100%;height:auto}</style></head><body>${body}</body></html>`;
   return `<div class="sub" style="margin-bottom:6px"><b>Subject:</b> <span id="tdPrevSubj">${esc(subj)}</span></div>
     <iframe class="tplprev" id="tdFrame" sandbox="" referrerpolicy="no-referrer" title="Message preview" srcdoc="${esc(doc)}"></iframe>
@@ -2578,11 +2580,11 @@ async function tWrite(fn) {
 function syncDraft() { const T = tplTS(); if (!T.draft || T.draft.owner_id) return; for (const [id, k] of [['tdName', 'name'], ['tdSubj', 'subject'], ['tdBody', 'body_html']]) { const x = $('#' + id); if (x) T.draft[k] = x.value; } }
 async function tplSave() {
   const S = state.set, T = tplTS(); if (!T.draft || T.draft.owner_id || S.busy) return;
-  syncDraft(); const d = T.draft, name = d.name.trim();
+  syncDraft(); const d = T.draft, name = d.name.trim(), body_html = asHtml(d.body_html);
   if (!name) return setErr('A template needs a name.');
   await tWrite(async () => {
-    const row = d.isNew ? await api.addTemplate({ name, subject: d.subject, body_html: d.body_html, owner_id: null, active: true, fub_id: null })
-      : await api.updateTemplate(d.id, { name, subject: d.subject, body_html: d.body_html, updated_at: new Date().toISOString() });
+    const row = d.isNew ? await api.addTemplate({ name, subject: d.subject, body_html, owner_id: null, active: true, fub_id: null })
+      : await api.updateTemplate(d.id, { name, subject: d.subject, body_html, updated_at: new Date().toISOString() });
     T.rows = d.isNew ? [...T.rows, row] : T.rows.map(x => String(x.id) === String(row.id) ? row : x);
     T.draft = tplDraftOf(row); T.base = tplSig(T.draft); toast('Saved.');
   });
