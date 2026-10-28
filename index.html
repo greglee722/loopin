@@ -851,6 +851,9 @@ function makeApi(url, key) {
     async setAgentsTags(on) { return ok(await sb.from('team_settings').update({ agents_create_tags: !!on }).eq('id', 1).select('agents_create_tags').single()); },
     async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
     async addMember(row) { return ok(await sb.from('team_members').insert(row).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
+    // Confirm in Zillow: the status RPC never returns a link; the URL RPC is the only way the app gets one, and it is never stored or shown.
+    async confirmStatus() { return ok(await sb.rpc('pl_listing_confirm_status')); },
+    async confirmUrl(id) { return ok(await sb.rpc('pl_listing_confirm_url', { p_id: id })); },
     async row(id) { return ok(await sb.from('people').select(cols()).eq('id', id).maybeSingle()); },
     async setContacted(id, on, meId) {
       return ok(await sb.from('people').update({ contacted_at: on ? new Date().toISOString() : null, contacted_by: on ? meId : null })
@@ -928,7 +931,7 @@ const state = {
   sel: new Set(), onlyIds: null, bulk: null, list: [], shownIds: [],
   edit: null, lastEdit: null, tags: [], agentTags: false,
   set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
-  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
+  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
   view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
@@ -1024,7 +1027,7 @@ function resetApp() {
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
-  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set() },
+  rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
   inqCache.clear(); state.sel.clear();
   $('#search').value = '';
@@ -2059,6 +2062,7 @@ async function loadListings() {
     const rows = await api.listings();
     if (gen !== loadGen) return;
     state.renew.list = rows || []; state.renew.loaded = true; state.renew.err = ''; state.renew.at = Date.now();
+    await loadConfirmStatus(gen);
   } catch (e) {
     if (gen !== loadGen) return;
     if (isMissingTable(e)) {
@@ -2066,6 +2070,21 @@ async function loadListings() {
       if (state.view === 'renewals') { state.view = 'dash'; try { history.replaceState(null, '', location.href.split('#')[0] + '#dash'); } catch (_) {} applyView(); }
     } else state.renew.err = e.message || 'Could not load listings.';
   } finally { if (gen === loadGen) { state.renew.busyLoad = false; renewChrome(); if (state.view === 'renewals') renderRenew(); else if (state.view === 'dash') renderDash(); } }
+}
+// Which expiring listings have a usable confirm link (never the link itself) and when each was last opened.
+const isMissingRpc = (e) => !!e && (e.code === 'PGRST202' || e.code === '42883' || /pl_listing_confirm/i.test(e.message || ''));
+async function loadConfirmStatus(gen) {
+  const R = state.renew;
+  if (!R.cOn) return;
+  try {
+    const rows = await api.confirmStatus();
+    if (gen !== loadGen) return;
+    R.confirm = new Map((rows || []).map(r => [Number(r.listing_id), { until: r.link_until, last: r.last_opened_at }])); R.cErr = false;
+  } catch (e) {
+    if (gen !== loadGen) return;
+    if (isMissingRpc(e)) R.cOn = false;   // SQL 10 has not run yet: no Confirm buttons, no error
+    else { R.confirm = new Map(); R.cErr = true; }
+  }
 }
 function renderRenew() {
   const R = state.renew, el = $('#renewBody');
@@ -2082,23 +2101,106 @@ function renderRenew() {
   const addr = (l) => `<div class="name">${esc(l.listing_address || 'Unknown address')}</div>`;
   const open = (l) => { const u = zillowUrl(l.property_id); return u ? `<a class="btn small" href="${esc(u)}" target="_blank" rel="noopener">Open in Zillow</a>` : ''; };
   const dis = (l) => R.busy.has(l.id) ? 'disabled' : '';
-  const acts = (l) => `<div class="row">${open(l)}<button class="btn small" data-renewed="${esc(l.id)}" ${dis(l)}>Renewed</button><button class="btn small" data-rented="${esc(l.id)}" ${dis(l)}>Rented</button></div>`;
+  const confirmBtn = (l) => {
+    if (l.status !== 'expiring' || !R.cOn || R.cErr) return '';
+    return R.confirm.has(Number(l.id)) ? `<button class="btn small primary" data-confirm="${esc(l.id)}" ${dis(l)}>Confirm in Zillow</button>` : '<span class="sub" data-nolink>No confirm link — use Open in Zillow</span>';
+  };
+  const HINT = 'Use after you confirm it in Zillow. This does not change Zillow.';
+  const acts = (l) => `<div class="row">${confirmBtn(l)}${open(l)}<button class="btn small" data-renewed="${esc(l.id)}" title="${HINT}" ${dis(l)}>Mark as renewed</button><button class="btn small" data-rented="${esc(l.id)}" ${dis(l)}>Rented</button></div>`;
+  const pick = (l) => confirmable(l) ? `<input type="checkbox" data-pick="${esc(l.id)}" ${R.sel.has(l.id) ? 'checked' : ''} ${R.batch && R.batch.running ? 'disabled' : ''} aria-label="Select ${esc(l.listing_address || 'listing')}" style="margin:3px 8px 0 0">` : '';
+  const openedLine = (l) => {
+    if (l.status !== 'expiring') return '';
+    if (R.opened.has(l.id)) return `<div class="sub opened-q" data-opened="${esc(l.id)}">Opened in Zillow just now. Did Zillow confirm it? <button class="btn small primary" data-yes="${esc(l.id)}" ${dis(l)}>Yes, mark renewed</button> <button class="btn small" data-notyet="${esc(l.id)}">Not yet</button></div>`;
+    const c = R.confirm.get(Number(l.id));
+    return c && c.last ? `<div class="sub opened-at">Opened ${esc(new Date(c.last).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</div>` : '';
+  };
   const pill = (days) => `<span class="pill ${days <= 3 ? 'bad' : days <= 7 ? 'warn' : 'info'} num">${days <= 0 ? (days === 0 ? 'today' : `${-days} days late`) : `${days} day${days === 1 ? '' : 's'}`}</span>`;
   const head = (cols) => `<thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>`;
   const sec = (title, id, body) => `<section class="card" id="${id}"><h2>${title}</h2><div class="tablewrap" style="border:0;border-radius:0">${body}</div></section>`;
-  const expTable = expiring.length ? `<table>${head(['Listing', 'Account', 'Expires', 'Last notice', ''])}<tbody>${expiring.map(l => {
+  const linkRows = expiring.filter(confirmable), nSel = linkRows.filter(l => R.sel.has(l.id)).length, B = R.batch, running = !!(B && B.running);
+  const cfBar = (R.cOn && !R.cErr && (linkRows.length || B)) ? `<div class="bulkbar" id="cfBar" style="position:static">
+    ${linkRows.length ? `<div class="bulkrow"><label class="contacted"><input type="checkbox" id="cfAll" ${nSel && nSel === linkRows.length ? 'checked' : ''} ${running ? 'disabled' : ''}>Select all with a confirm link</label><button class="btn small primary" id="cfGo" ${nSel && !running ? '' : 'disabled'}>Confirm all selected (${nSel})</button></div>` : ''}
+    ${B && B.blocked ? `<div class="bulkrow bad" id="cfBlocked">${esc(BLOCKED_MSG)}</div>` : ''}
+    ${B && B.running ? `<div class="bulkrow"><b class="num" id="cfProg">Confirming ${B.done} of ${B.total}…</b><button class="btn small" id="cfStop" ${B.stop ? 'disabled' : ''}>Stop</button></div>` : ''}
+    ${B && B.finished ? `<div class="bulkrow" id="cfDone"><span>Opened ${B.opened.length} confirm page${B.opened.length === 1 ? '' : 's'} in Zillow (${B.failed.length} failed${B.failed.length ? ': ' + esc([...new Set(B.failed.map(f => f.reason))].join('; ')) : ''}). Did Zillow confirm ${B.opened.length === 1 ? 'it' : 'them'}?</span>${B.opened.length ? `<button class="btn small primary" id="cfMarkAll" ${B.marking ? 'disabled' : ''}>Mark all ${B.opened.length} as renewed</button>` : ''}<button class="btn small" id="cfNotYet" ${B.marking ? 'disabled' : ''}>Not yet</button></div>` : ''}</div>` : '';
+  const expTable = expiring.length ? `${cfBar}<table>${head(['Listing', 'Account', 'Expires', 'Last notice', ''])}<tbody>${expiring.map(l => {
     const d = l.expires_on ? dateOnly(l.expires_on) : null, days = d ? daysFromToday(d) : null;
-    return `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>${d ? `expires ${esc(fmtMonthDay(d))} ${pill(days)}` : '<span class="sub">no date</span>'}</td><td class="sub">${notice(l)}</td><td>${acts(l)}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty-s">None.</div>';
+    return `<tr data-listing="${esc(l.id)}"><td><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${pick(l)}<div>${addr(l)}${openedLine(l)}</div></div></td><td>${acct(l)}</td><td>${d ? `expires ${esc(fmtMonthDay(d))} ${pill(days)}` : '<span class="sub">no date</span>'}</td><td class="sub">${notice(l)}</td><td>${acts(l)}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty-s">None.</div>';
   const expdTable = expired.length ? `<table>${head(['Listing', 'Account', 'Expired', 'Last notice', ''])}<tbody>${expired.map(l => {
     const d = l.expires_on ? dateOnly(l.expires_on) : null;
     return `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>expired since ${esc(d ? fmtMonthDay(d) : l.last_notice_at ? fmtMonthDay(new Date(l.last_notice_at)) : '—')}</td><td class="sub">${notice(l)}</td><td>${acts(l)}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty-s">None.</div>';
   const disTable = `<table>${head(['Listing', 'Account', 'Dismissed', '', ''])}<tbody>${dismissed.map(l => `<tr data-listing="${esc(l.id)}"><td>${addr(l)}</td><td>${acct(l)}</td><td>${esc(l.dismissed_reason || 'other')} · ${esc(memberName(l.dismissed_by) || 'a team member')} · ${esc(fmtShort(l.dismissed_at))}</td><td></td><td><div class="row">${open(l)}<button class="btn small" data-undo="${esc(l.id)}" ${dis(l)}>Undo</button></div></td></tr>`).join('')}</tbody></table>`;
   const nothing = !expiring.length && !expired.length && !dismissed.length;
-  el.innerHTML = `<p class="renew-note" id="renewNote">LoopIn lists the listings Zillow emailed about. It does not change anything in Zillow. Mark a listing Renewed after you confirm it in Zillow, or Rented to hide it.</p>
+  el.innerHTML = `<p class="renew-note" id="renewNote">Confirm in Zillow opens Zillow's own confirm page in a new tab, the same as the button in Zillow's email. LoopIn never confirms anything by itself.</p>
+    <p class="renew-note sub" id="renewHint">Mark as renewed: ${'Use after you confirm it in Zillow. This does not change Zillow.'} Rented hides the listing.</p>
     <div class="toolbar"><select class="btn" id="rAcct" aria-label="Zillow account"><option value="">All accounts</option>${accts.map(a => `<option value="${esc(a)}" ${a === keep ? 'selected' : ''} title="${esc(a)}">${esc(zLocal(a))}</option>`).join('')}</select>
       <label class="contacted"><input type="checkbox" id="rShowDis" ${R.showDismissed ? 'checked' : ''}>Show dismissed</label></div>
     ${R.err ? `<div class="empty-s" id="renewErr">${esc(R.err)} <button class="btn small" id="renewRetry">Try again</button></div>` : !R.loaded ? '<div class="loading-s">Loading…</div>' : nothing ? '<div class="empty-s" id="renewEmpty">No listings need attention.</div>' : ''}
     ${R.loaded && !(nothing) ? `<div class="colstack">${sec('Expiring soon — confirm availability in Zillow', 'renew-expiring', expTable)}${sec('Expired — reactivate in Zillow', 'renew-expired', expdTable)}${R.showDismissed ? sec('Dismissed', 'renew-dismissed', dismissed.length ? disTable : '<div class="empty-s">None.</div>') : ''}</div>` : ''}`;
+}
+// ----- Confirm all selected, in batches -----
+const CONFIRM_BATCH = 10;          // never more than this many Zillow tabs open at once
+const CONFIRM_WAIT_MS = 20000;     // how long a batch of tabs stays open before they are closed
+let confirmWaitMs = CONFIRM_WAIT_MS;   // the harness can shorten this
+const BLOCKED_MSG = 'Your browser blocked the pop-ups. Click the pop-up icon at the right of the address bar, choose Always allow pop-ups from greglee722.github.io, then click Confirm all selected again.';
+const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+const confirmable = (l) => l && l.status === 'expiring' && !l.dismissed_at && state.renew.cOn && !state.renew.cErr && state.renew.confirm.has(Number(l.id));
+function confirmAllClick() {
+  const R = state.renew; if (R.batch && R.batch.running) return;
+  const ids = [...R.sel].filter(id => confirmable(R.list.find(l => l.id === id)));
+  if (!ids.length) return;
+  const first = window.open('', '_blank');   // opened synchronously inside the click, so the pop-up blocker allows it
+  if (!first) { R.batch = { blocked: true, running: false }; renderRenew(); return; }
+  R.batch = { running: true, total: ids.length, done: 0, stop: false, opened: [], failed: [], blocked: false, ids };
+  runBatches(first);
+}
+async function runBatches(first) {
+  const R = state.renew, B = R.batch, gen = loadGen; let pre = first;
+  renderRenew();
+  for (let i = 0; i < B.ids.length && !B.stop; i += CONFIRM_BATCH) {
+    const tabs = [];
+    for (const id of B.ids.slice(i, i + CONFIRM_BATCH)) {
+      const w = pre || window.open('', '_blank'); pre = null;
+      if (!w) { B.blocked = true; B.stop = true; break; }
+      try {
+        const url = await api.confirmUrl(id);   // used once, never stored or shown
+        if (gen !== loadGen) return;
+        w.opener = null; w.location.href = url; tabs.push(w); B.opened.push(id);
+      } catch (e) { try { w.close(); } catch (_) {} B.failed.push({ id, reason: e.message || 'Could not open the confirm page.' }); }
+      B.done++; renderRenew();
+    }
+    if (tabs.length) await sleepMs(confirmWaitMs);
+    tabs.forEach(w => { try { w.close(); } catch (_) {} });   // every tab of the batch is closed before the next batch opens
+  }
+  B.running = false; B.finished = true; R.sel.clear();
+  renderRenew();
+}
+async function markAllRenewed() {
+  const R = state.renew, B = R.batch; if (!B || !B.finished || B.marking) return;
+  B.marking = true; renderRenew();
+  const bad = [];
+  for (const id of B.opened) { try { await api.dismissListing(id, 'renewed'); } catch (e) { bad.push(e.message); } }
+  try { R.list = (await api.listings()) || []; } catch (e) { bad.push(e.message); }
+  if (bad.length) toast(`${bad.length} could not be marked renewed: ${[...new Set(bad)].join('; ')}`);
+  R.batch = null; renewChrome(); renderRenew(); if (state.view === 'dash') renderDash();
+}
+// Open Zillow's own confirm page in the manager's browser. The blank tab is opened first, synchronously inside the click,
+// so a pop-up blocker allows it. The link is used once and is never stored, shown, logged or put in LoopIn's address bar.
+async function confirmInZillow(id) {
+  const R = state.renew; if (R.busy.has(id) || (R.batch && R.batch.running)) return;
+  const w = window.open('', '_blank');
+  if (!w) { toast('The new tab was blocked. Allow pop-ups for this page, then try again.'); return; }
+  R.busy.add(id); renderRenew();
+  try {
+    const url = await api.confirmUrl(id);
+    w.opener = null; w.location.href = url;
+    R.opened.add(id);
+    const c = R.confirm.get(id) || {}; R.confirm.set(id, { until: c.until, last: new Date().toISOString() });
+  } catch (e) {
+    try { w.close(); } catch (_) {}
+    toast(e.message || 'Could not open the confirm page.');
+  }
+  R.busy.delete(id); renderRenew();
 }
 async function dismissListing(id, reason) {
   const R = state.renew; if (R.busy.has(id)) return;
@@ -2118,7 +2220,19 @@ $('#view-renew').addEventListener('click', e => {
   const t = e.target, id = (k) => { const b = t.closest(`[${k}]`); return b ? b.getAttribute(k) : null; };
   if (t.closest('#renewRetry')) { state.renew.busyLoad = false; loadListings(); return; }
   let v;
-  if ((v = id('data-renewed')) != null) { if (!t.closest('[data-renewed]').disabled) dismissListing(Number(v), 'renewed'); return; }
+  if (t.closest('#cfGo')) { confirmAllClick(); return; }
+  if (t.closest('#cfStop')) { if (state.renew.batch) { state.renew.batch.stop = true; renderRenew(); } return; }
+  if (t.closest('#cfMarkAll')) { markAllRenewed(); return; }
+  if (t.closest('#cfNotYet')) { if (state.renew.batch && !state.renew.batch.marking) { state.renew.batch = null; renderRenew(); } return; }
+  if ((v = id('data-confirm')) != null) { if (!t.closest('[data-confirm]').disabled) confirmInZillow(Number(v)); return; }
+  if ((v = id('data-yes')) != null) { if (!t.closest('[data-yes]').disabled) { state.renew.opened.delete(Number(v)); dismissListing(Number(v), 'renewed'); } return; }
+  if ((v = id('data-notyet')) != null) { state.renew.opened.delete(Number(v)); renderRenew(); return; }
+  if ((v = id('data-renewed')) != null) {
+    const l = state.renew.list.find(x => String(x.id) === v); if (!l || t.closest('[data-renewed]').disabled) return;
+    showModal(`<h3 id="renewText">Mark ${esc(l.listing_address || 'this listing')} as renewed?</h3><p style="margin:0;color:var(--ink-2)">Only do this after it is confirmed in Zillow.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="renewGo">Mark as renewed</button></div>`);
+    $('#renewGo').onclick = () => { closeModal(); dismissListing(l.id, 'renewed'); };
+    return;
+  }
   if ((v = id('data-undo')) != null) { if (!t.closest('[data-undo]').disabled) undoListing(Number(v)); return; }
   if ((v = id('data-rented')) != null) {
     const l = state.renew.list.find(x => String(x.id) === v); if (!l || t.closest('[data-rented]').disabled) return;
@@ -2127,6 +2241,8 @@ $('#view-renew').addEventListener('click', e => {
   }
 });
 $('#view-renew').addEventListener('change', e => {
+  if (e.target.dataset.pick != null) { const idn = Number(e.target.dataset.pick); if (e.target.checked) state.renew.sel.add(idn); else state.renew.sel.delete(idn); renderRenew(); return; }
+  if (e.target.id === 'cfAll') { document.querySelectorAll('#view-renew [data-pick]').forEach(b => { const n = Number(b.dataset.pick); if (e.target.checked) state.renew.sel.add(n); else state.renew.sel.delete(n); }); renderRenew(); return; }
   if (e.target.id === 'rAcct') { state.renew.acct = e.target.value; renderRenew(); }
   else if (e.target.id === 'rShowDis') { state.renew.showDismissed = e.target.checked; renderRenew(); }
 });
