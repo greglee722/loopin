@@ -681,6 +681,35 @@ th.num-col button { white-space: nowrap; }
   .toolbar select.btn { flex: 1 1 130px; min-width: 0; }
   .authcard { margin-top: 6vh; }
 }
+/* Settings home, My settings, templates, system check (v1.8) */
+.cust { margin-bottom: 22px; } .cust h2 { font-size: 20px; font-weight: 600; margin: 0 0 10px; }
+.custcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.custcard { position: relative; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; text-align: left; padding: 18px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--btn-shadow); color: var(--ink); }
+button.custcard:hover { border-color: var(--accent); }
+.custcard .ci { font-size: 22px; line-height: 1; display: flex; align-items: center; } .custcard b { font-size: 17px; }
+.custcard .cs { grid-column: 1 / -1; color: var(--ink-2); font-size: 13.5px; } .custcard .cs .cv { font-weight: 700; color: var(--ink); margin-right: 4px; }
+.custcard .cs.warn, .custcard .cs.warn .cv { color: var(--warn); } .custcard .cs.warn { font-weight: 600; }
+.custcard .ci .avatar { width: 30px; height: 30px; font-size: 12px; }
+.custcard.soon, .soonrow { background: var(--surface-2); box-shadow: none; cursor: default; }
+.custcard.soon .ci, .custcard.soon b, .custcard.soon .cs, .soonrow > div { opacity: .5; }
+.custcard.soon { padding-top: 28px; padding-bottom: 12px; }
+.soonpill { position: absolute; top: 7px; right: 10px; font-size: 11px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; line-height: 1.6; white-space: nowrap; }
+.soonrow { position: relative; display: block; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+.tplrow { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 9px 2px; color: var(--ink); flex-wrap: wrap; }
+.tplrow:last-child { border-bottom: 0; } .tplrow:hover b { color: var(--accent); } .tplrow .grow { flex: 1 1 220px; min-width: 0; }
+.tplgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.tplgrid .field { margin-bottom: 10px; }
+.tplgrid textarea, .tplgrid input:not([type=checkbox]), #settingsBody .field input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.tplgrid textarea { min-height: 220px; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.tplgrid input:disabled, .tplgrid textarea:disabled { opacity: .7; }
+.tplprev { display: block; width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.okline { color: var(--ok); font-size: 12.5px; } .warntext { color: var(--warn); font-size: 12.5px; }
+.syscheck { border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-size: 13.5px; border: 1px solid; }
+.syscheck.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, transparent); } .syscheck.bad { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.sysrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--line); } .sysrow:last-child { border-bottom: 0; }
+.sysrow .who { flex: 1 1 240px; } .sysrow .who .sub { overflow-wrap: anywhere; } .sysrow .sysst { flex: 1 1 240px; min-width: 0; }
+@media (max-width: 600px) { .custcards { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
@@ -760,6 +789,7 @@ const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publ
 const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
+const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
 function makeApi(url, key) {
@@ -778,7 +808,7 @@ function makeApi(url, key) {
     },
     async signOut() { ok(await sb.auth.signOut()); },
     async me(userId) {
-      return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export')
+      return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export,theme')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
     async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on')); },
@@ -842,7 +872,7 @@ function makeApi(url, key) {
     // Settings (managers; row-level security allows these writes only for a manager)
     async allStages() { return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable,active').order('sort_order')); },
     async allFields() { return ok(await sb.from('custom_field_defs').select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').order('sort_order')); },
-    async allTeam() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,photo_url,reminder_days,hit_reviewed_on')); },
+    async allTeam() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme,photo_url,reminder_days,hit_reviewed_on')); },
     async updateStage(id, patch) { return ok(await sb.from('stages').update(patch).eq('id', id).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
     async addStage(row) { return ok(await sb.from('stages').insert(row).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
     async updateField(key, patch) { return ok(await sb.from('custom_field_defs').update(patch).eq('key', key).select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').single()); },
@@ -850,8 +880,21 @@ function makeApi(url, key) {
     async addTagName(name) { return ok(await sb.from('tags').insert({ name }).select('name').single()); },
     async deleteTag(name) { gone(await sb.from('tags').delete().eq('name', name).select('name')); },
     async setAgentsTags(on) { return ok(await sb.from('team_settings').update({ agents_create_tags: !!on }).eq('id', 1).select('agents_create_tags').single()); },
-    async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
-    async addMember(row) { return ok(await sb.from('team_members').insert(row).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone').single()); },
+    async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme').single()); },
+    async addMember(row) { return ok(await sb.from('team_members').insert(row).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme').single()); },
+    // Email templates (v1.8). Page past the 1000-row cap.
+    async templates() {
+      const out = [];
+      for (let from = 0; ; from += 1000) {
+        const r = ok(await sb.from('templates').select(TPL_COLS).order('name').order('id').range(from, from + 999));
+        out.push(...r); if (r.length < 1000) return out;
+      }
+    },
+    async updateTemplate(id, patch) { return ok(await sb.from('templates').update(patch).eq('id', id).select(TPL_COLS).single()); },
+    async addTemplate(row) { return ok(await sb.from('templates').insert(row).select(TPL_COLS).single()); },
+    async deleteTemplate(id) { gone(await sb.from('templates').delete().eq('id', id).select('id')); },
+    async templateInUse(id) { return ok(await sb.from('auto_response_steps').select('template_id').eq('template_id', id).limit(1)).length > 0; },
+    async heartbeats() { return ok(await sb.from('script_heartbeats').select('member_id,last_run_at,last_result')); },
     // Confirm in Zillow: the status RPC never returns a link; the URL RPC is the only way the app gets one, and it is never stored or shown.
     async confirmStatus() { return ok(await sb.rpc('pl_listing_confirm_status')); },
     async confirmUrl(id) { return ok(await sb.rpc('pl_listing_confirm_url', { p_id: id })); },
@@ -1030,7 +1073,7 @@ function resetApp() {
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
-  inqCache.clear(); state.sel.clear();
+  inqCache.clear(); state.sel.clear(); applyTheme(null);
   $('#search').value = '';
   closeModal();
 }
@@ -1049,6 +1092,7 @@ async function start(session) {
   try { me = await api.me(session.user.id); } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   if (myGen !== loadGen) return;
   if (!me) { showNotOnTeam(session.user.email); return; }
+  applyTheme(me.theme);   // right after the member row loads, before the other lists
   try {
     const [team, stages, fields] = await Promise.all([api.team(), api.stages(), api.fields()]);
     if (myGen !== loadGen) return;
@@ -2267,9 +2311,8 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.8';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
-const SET_PAGES = [['stages', 'Stages'], ['fields', 'Custom fields'], ['tags', 'Tags'], ['team', 'Team'], ['about', 'About']];
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
 const ciEq = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
@@ -2286,6 +2329,7 @@ async function openSettings() {
     S.loading = true; renderSettings();
     try { await loadSettingsData(); } catch (e) { S.err = e.message || 'Could not load settings.'; }
     S.loading = false;
+    if (S.loaded) { loadTpl(); loadHb(); }
   }
   renderSettings();
 }
@@ -2296,7 +2340,7 @@ async function reloadAll() {
   await loadSettingsData();
   renderFilters(); renderList(); renderPanel(); renderChromeBits();
 }
-function renderChromeBits() { if (state.me) { const m = state.team.find(x => x.id === state.me.id); if (m) state.me.role = m.role; renewChrome(); } }
+function renderChromeBits() { if (state.me) { const m = state.team.find(x => x.id === state.me.id); if (m) { state.me.role = m.role; if (state.me.full_name !== m.full_name) { state.me.full_name = m.full_name; renderMe(); } } renewChrome(); } }
 async function sWrite(fn) {
   const S = state.set; if (S.busy) return false;
   S.busy = true; renderSettings();
@@ -2306,7 +2350,7 @@ async function sWrite(fn) {
 }
 const sdis = () => state.set.busy ? 'disabled' : '';
 const switchBox = (attr, id, on, label, disabled, title) => `<label class="contacted" ${title ? `title="${esc(title)}"` : ''}><input type="checkbox" ${attr}="${esc(id)}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : sdis()}>${esc(label)}</label>`;
-const subHead = (title, desc) => `<div class="subhead row"><button class="btn small" data-setpage="">‹ Settings</button><h2 style="margin:0">${esc(title)}</h2></div><p class="sub" style="margin:8px 0 12px">${desc}</p>`;
+const subHead = (title, desc, btn = '', back = '', backLabel = 'Settings') => `<div class="subhead row"><button class="btn small" data-setpage="${back}">‹ ${esc(backLabel)}</button><h2 style="margin:0">${esc(title)}</h2>${btn ? `<span class="spacer"></span>${btn}` : ''}</div><p class="sub" style="margin:8px 0 12px">${desc}</p>`;
 const usedBy = (n) => `Used by ${n.toLocaleString('en-US')} lead${n === 1 ? '' : 's'}`;
 const sorted = (a) => a.slice().sort((x, y) => x.sort_order - y.sort_order);
 function optUsed(f, o) { let n = 0; for (const p of all) { const v = (p.custom || {})[f.key]; if (f.type === 'multiselect' ? Array.isArray(v) && v.includes(o) : v === o) n++; } return n; }
@@ -2370,6 +2414,209 @@ function pageAbout() {
     <div class="dvals"><span class="dlabel">Supabase plan</span><span class="dval">${esc(SUPABASE_PLAN)}</span><span></span></div>
     <div class="dvals"><span class="dlabel">Data</span><span class="dval">Data syncs from Follow Up Boss every night at 2:30 AM.</span><span></span></div></div>`;
 }
+// ───────── v1.8: home cards, My settings, Email templates, System check ─────────
+function applyTheme(t) { const r = document.documentElement; if (t === 'light' || t === 'dark') r.dataset.theme = t; else r.removeAttribute('data-theme'); }
+const byNameAsc = (a, b) => String(a.full_name).localeCompare(String(b.full_name)) || String(a.id).localeCompare(String(b.id));
+const selfRow = () => state.set.team.find(x => x.id === state.me.id) || {};
+const TPL_TOKENS = ['First name', 'Last name', 'Listing', 'Move-in date', 'Agent name', 'Agent first name', 'Agent phone', 'Agent email'];
+const tplTS = () => state.set.tpl || (state.set.tpl = { rows: null, err: '', q: '', filter: 'all', draft: null, base: '', prevId: '', prevQ: '', last: 'tdBody', inqTried: new Set() });
+const HB_LATE_MIN = 15;
+
+async function loadTpl() {
+  const T = tplTS(), gen = loadGen;
+  try { const rows = await api.templates(); if (gen !== loadGen) return; T.rows = rows; T.err = ''; }
+  catch (e) { if (gen !== loadGen) return; T.err = e.message || 'Could not load templates.'; }
+  const S = state.set; if (!S.page || (S.page === 'templates' && !T.draft)) renderSettings();
+}
+async function loadHb() {
+  const S = state.set, gen = loadGen; S.hbBusy = true;
+  try { const r = await api.heartbeats(); if (gen !== loadGen) return; S.hb = r; S.hbErr = ''; }
+  catch (e) { if (gen !== loadGen) return; S.hb = null; S.hbErr = e.message || 'Could not read the system check.'; }
+  S.hbBusy = false; if (!S.page || S.page === 'system') renderSettings();
+}
+function sysRows(S) {
+  const hb = new Map((S.hb || []).map(h => [h.member_id, h]));
+  return S.team.filter(m => m.active && m.lead_gmail).sort(byNameAsc).map(m => {
+    const h = hb.get(m.id), age = h ? (Date.now() - Date.parse(h.last_run_at)) / 60000 : NaN;
+    return { m, h, age, st: !isFinite(age) ? 'none' : age <= HB_LATE_MIN ? 'ok' : 'late' };
+  });
+}
+function agoText(min) {
+  if (min < 1) return 'less than a minute ago';
+  if (min < 60) { const n = Math.round(min); return `${n} minute${n === 1 ? '' : 's'} ago`; }
+  const h = Math.round(min / 60); if (h < 48) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
+// Only plain counts from last_result are shown; never raw JSON, names or addresses.
+function hbSummary(r) {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return '';
+  return ['received', 'new', 'created', 'processed', 'skipped', 'errors'].filter(k => Number.isFinite(r[k])).map(k => `${r[k]} ${k}`).join(', ');
+}
+
+function pageHome(S) {
+  const T = S.tpl, tc = T && T.rows ? T.rows.length : null, issues = S.hb ? sysRows(S).filter(r => r.st !== 'ok').length : null;
+  const card = (pg, icon, title, sub, cls = '') => `<button class="custcard" data-setpage="${pg}"><span class="ci" aria-hidden="true">${icon}</span><b>${title}</b><span class="cs ${cls}">${sub}</span></button>`;
+  const soon = (icon, title, sub) => `<div class="custcard soon" aria-disabled="true"><span class="soonpill">Coming soon</span><span class="ci" aria-hidden="true">${icon}</span><b>${title}</b><span class="cs">${sub}</span></div>`;
+  const group = (title, cards) => `<div class="cust"><h2>${title}</h2><div class="custcards">${cards.join('')}</div></div>`;
+  const cv = (v) => `<span class="cv">${v}</span>`;
+  return group('User Settings', [card('mine', avatar(state.me.id, 'sm'), 'My settings', 'Your name, phone and email, plus theme.')])
+    + group('Automation', [soon('⚡', 'Auto responses', 'Emails that go out on their own when a new lead comes in, then follow up.'),
+      card('templates', '✉️', 'Email templates', `${cv(tc == null ? '—' : `${tc.toLocaleString('en-US')} template${tc === 1 ? '' : 's'}`)} Write the emails your team sends, with blanks like {First name}.`)])
+    + group('Customize', [card('fields', '✍️', 'Custom fields', `${cv(S.fields.length)} labels, order, options`), card('stages', '🧰', 'Stages', `${cv(S.stages.length)} order, closes the lead`),
+      card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), soon('📋', 'Smart lists', 'Order, rename, hide or delete the team lists in the People sidebar.')])
+    + group('Admin', [card('team', '👥', 'Team', `${cv(S.team.length)} who can sign in`),
+      card('system', '🩺', 'System check', issues == null ? (S.hbErr ? 'Not available right now' : 'Checking…') : issues ? `${issues} ${issues === 1 ? 'needs' : 'need'} a look` : 'All lead Gmails OK', issues ? 'warn' : ''),
+      card('about', 'ⓘ', 'About', `${cv('v' + APP_VERSION)} version and sync`)]);
+}
+
+function pageMine(S) {
+  const m = selfRow(), d = S.my = S.my || { name: m.full_name || '', phone: fmtPhone(m.phone), email: m.contact_email || '' };
+  const th = m.theme === 'light' || m.theme === 'dark' ? m.theme : 'system';
+  return subHead('My settings', 'Only you can change these. Your name, phone and email fill in the blanks in your email templates.')
+    + `<div class="section" id="mineBox"><h4>Profile</h4><div class="fields">
+      <div class="field"><label for="msName">Full name</label><input id="msName" data-my="name" value="${esc(d.name)}" ${sdis()}></div>
+      <div class="field"><label for="msPhone">Mobile phone</label><input id="msPhone" data-my="phone" type="tel" inputmode="tel" value="${esc(d.phone)}" placeholder="10-digit US number" ${sdis()}></div>
+      <div class="field"><label for="msEmail">Contact email</label><input id="msEmail" data-my="email" type="email" value="${esc(d.email)}" ${sdis()}><div class="sub" id="msEmailHelp">Goes into templates as {Agent email}. Your sign-in stays your Google account.</div></div>
+      <div class="field"><label for="msSignIn">Sign-in email</label><input id="msSignIn" value="${esc(m.email || '')}" readonly><div class="sub" id="selfMailNote">${SELF_MAIL_NOTE}</div></div></div>
+      <div class="err" id="setErr"></div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" data-mysave ${sdis()}>Save</button></div></div>
+    <div class="section" style="margin-top:14px" id="themeBox"><h4>Theme</h4><div class="toggle"><div><b>Appearance</b><div class="sub">Light, dark, or follow your device.</div></div>
+      <span class="seg" role="group" aria-label="Theme">${[['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].map(([v, t]) => `<button data-theme-pick="${v}" aria-pressed="${th === v}" ${sdis()}>${t}</button>`).join('')}</span></div></div>
+    <div class="cust" style="margin-top:18px" id="mineSoon"><h2>Coming soon</h2>${[['Profile photo', 'Upload a photo to replace your initials'], ['Open a lead in', 'Side panel or full page'], ['My reminders', 'Move-in and "Still looking?" reminders']].map(([t, s]) => `<div class="soonrow" aria-disabled="true"><div><b>${esc(t)}</b><div class="sub">${esc(s)}</div></div></div>`).join('')}</div>`;
+}
+
+// Email templates
+const tplDraftOf = (r) => ({ id: r.id, isNew: false, name: r.name || '', subject: r.subject || '', body_html: r.body_html || '', owner_id: r.owner_id || null, fub_id: r.fub_id || null });
+const tplSig = (d) => JSON.stringify([d.name, d.subject, d.body_html]);
+const tplDirty = () => { const T = state.set.tpl; return !!(T && T.draft && !T.draft.owner_id && tplSig(T.draft) !== T.base); };
+function tplList(T) {
+  const q = T.q.trim().toLowerCase();
+  return T.rows.filter(t => (T.filter === 'all' || (T.filter === 'team' ? !t.owner_id : !!t.owner_id)) && (!q || `${t.name || ''} ${t.subject || ''}`.toLowerCase().includes(q)))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id)));
+}
+function tplRowsHtml(T) {
+  const l = tplList(T);
+  return l.map(t => `<button class="tplrow" data-topen="${esc(t.id)}"><div class="grow"><b>${esc(t.name)}</b> ${t.owner_id ? `<span class="pill">${esc(memberName(t.owner_id) || 'Agent')}</span>` : '<span class="pill info">Team</span>'}${t.fub_id ? ' <span class="pill warn">From Follow Up Boss</span>' : ''}<div class="sub">${esc(t.subject || '')}</div></div><span class="sub num">${esc(fmtShort(t.updated_at || t.created_at))}</span></button>`).join('') || '<div class="sub">No templates match.</div>';
+}
+function tokenValue(tok, p, m) {
+  switch (tok) {
+    case 'First name': return p ? p.first_name || '' : '';
+    case 'Last name': return p ? p.last_name || '' : '';
+    case 'Listing': { const a = p && inqCache.get(p.id); return a ? String(a).split(',')[0] : 'the apartment'; }
+    case 'Move-in date': { const v = p && (p.custom || {}).move_in_date; return (v && rangeText(v)) || 'your move-in date'; }
+    case 'Agent name': return m.full_name || '';
+    case 'Agent first name': return String(m.full_name || '').split(' ')[0];
+    case 'Agent phone': return fmtPhone(m.phone);
+    case 'Agent email': return m.contact_email || '';
+  }
+  return '';
+}
+const fillTokens = (txt, p, m, f) => String(txt || '').replace(/\{([A-Za-z][A-Za-z0-9 _-]{0,40})\}/g, (x, t) => TPL_TOKENS.includes(t) ? f(tokenValue(t, p, m)) : x);
+function unfilled(txt) {
+  const out = []; for (const x of String(txt || '').matchAll(/\{([A-Za-z][A-Za-z0-9 _-]{0,40})\}|%[A-Za-z][A-Za-z0-9_]*%/g)) if (!(x[1] && TPL_TOKENS.includes(x[1])) && !out.includes(x[0])) out.push(x[0]);
+  return out;
+}
+const prevPerson = (T) => byId.get(T.prevId) || all[0] || null;
+function previewHtml(T) {
+  const d = T.draft, p = prevPerson(T), m = selfRow(), subj = fillTokens(d.subject, p, m, String), body = fillTokens(d.body_html, p, m, esc), miss = unfilled(d.subject + '\n' + d.body_html);
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'"><style>body{margin:12px;font:14px/1.5 -apple-system,Segoe UI,Arial,sans-serif;color:#222;background:#fff}img{max-width:100%;height:auto}</style></head><body>${body}</body></html>`;
+  return `<div class="sub" style="margin-bottom:6px"><b>Subject:</b> <span id="tdPrevSubj">${esc(subj)}</span></div>
+    <iframe class="tplprev" id="tdFrame" sandbox="" referrerpolicy="no-referrer" title="Message preview" srcdoc="${esc(doc)}"></iframe>
+    ${miss.length ? `<div class="sub" id="tdUnfilled" style="margin-top:6px">Not filled in: ${miss.map(esc).join(', ')}</div>` : ''}`;
+}
+function leadResHtml(T) {
+  const q = T.prevQ.trim().toLowerCase(), dg = q.replace(/\D/g, ''); if (!q) return '';
+  const hits = []; for (const p of all) { if (p._ls.includes(q) || (dg.length >= 3 && p._dg.includes(dg))) { hits.push(p); if (hits.length >= 8) break; } }
+  return `<div class="chips" style="margin-top:6px">${hits.map(p => `<button type="button" class="chip" data-tlead="${esc(p.id)}">${esc(p._name || 'No name')}</button>`).join('') || '<span class="sub">No one found.</span>'}</div>`;
+}
+function leadNowHtml(T) { const p = prevPerson(T); return p ? `As sent to: <b>${esc(p._name || 'No name')}</b>` : 'No people loaded yet. The blanks use sample words.'; }
+function refreshPrev() {
+  const T = state.set.tpl; if (!T || !T.draft || !$('#tdPreview')) return;
+  $('#tdPreview').innerHTML = previewHtml(T); $('#tdLeadNow').innerHTML = leadNowHtml(T); $('#tdLeadRes').innerHTML = leadResHtml(T);
+}
+async function ensureInq(id) {
+  const T = tplTS(); if (!id || inqCache.has(id) || T.inqTried.has(id)) return; T.inqTried.add(id);
+  try { const d = await api.person(id); if (d.inquiries && d.inquiries[0] && d.inquiries[0].listing_address) inqCache.set(id, d.inquiries[0].listing_address); } catch (_) {}
+  refreshPrev();
+}
+function pageTemplates(S) {
+  const T = tplTS();
+  if (T.draft) return pageTplEdit(S, T);
+  const head = subHead('Email templates', 'Team templates are for everyone, and managers edit them. An agent\'s own templates are private and read-only here. Blanks like {First name} fill in for each lead.', `<button class="btn primary small" id="tplNew" data-tplnew ${sdis()}>+ New template</button>`);
+  if (T.err) return head + `<div class="empty-s" id="tplErr">${esc(T.err)} <button class="btn small" data-tplretry>Try again</button></div>`;
+  if (!T.rows) return head + '<div class="loading-s">Loading…</div>';
+  return head + `<div class="section"><div class="row" style="margin-bottom:8px"><input class="slname" id="tplQ" style="flex:1;min-width:160px" placeholder="Search templates" value="${esc(T.q)}" aria-label="Search templates" autocomplete="off">
+    <span class="seg" role="group" aria-label="Show">${[['all', 'All'], ['team', 'Team'], ['agents', 'Agents\'']].map(([v, t]) => `<button data-tfilter="${v}" aria-pressed="${T.filter === v}">${t}</button>`).join('')}</span></div>
+    <div id="tplRows">${tplRowsHtml(T)}</div></div>`;
+}
+function pageTplEdit(S, T) {
+  const d = T.draft, ro = !!d.owner_id, dis = ro || S.busy ? 'disabled' : '', who = firstName(d.owner_id);
+  return subHead(d.isNew ? 'New template' : ro ? d.name : 'Edit template', ro ? `This is ${esc(who) || 'an agent'}'s private template, so you can read it here but not change it.` : 'Click a blank to put it where your cursor is.',
+      ro ? '' : `<button class="btn small" data-setpage="templates" ${sdis()}>Cancel</button><button class="btn primary small" data-tplsave ${sdis()}>Save</button>`, 'templates', 'Email templates')
+    + `<div class="tplgrid"><div class="section"><h4>Template</h4>
+      ${ro ? `<div class="sub" id="tplRoNote" style="margin-bottom:8px">This is ${esc(who) || 'an agent'}'s private template.</div>` : ''}
+      ${d.fub_id ? '<div class="sub" id="tplFubNote" style="margin-bottom:8px">Came from Follow Up Boss. Edits here stay in LoopIn and do not change Follow Up Boss.</div>' : ''}
+      <div class="field"><label for="tdName">Name</label><input id="tdName" data-td="name" value="${esc(d.name)}" ${dis}></div>
+      <div class="field"><label for="tdSubj">Subject</label><input id="tdSubj" data-td="subject" value="${esc(d.subject)}" ${dis}></div>
+      <div class="field"><label for="tdBody">Message (HTML)</label><textarea id="tdBody" data-td="body_html" rows="12" ${dis}>${esc(d.body_html)}</textarea></div>
+      ${ro ? '' : `<div class="field"><label>Insert a blank</label><div class="chips">${TPL_TOKENS.map(k => `<button type="button" class="chip" data-tok="${esc(k)}" ${sdis()}>{${esc(k)}}</button>`).join('')}</div></div>`}
+      <div class="err" id="setErr"></div>
+      ${!ro && !d.isNew && !d.fub_id ? `<div class="row" style="margin-top:8px"><button class="btn small danger" data-tpldel ${sdis()}>Delete template</button></div>` : ''}</div>
+      <div class="section"><h4>Preview</h4><div class="field"><label for="tdLeadQ">As sent to</label><input id="tdLeadQ" placeholder="Search by name, email or phone" value="${esc(T.prevQ)}" autocomplete="off"><div id="tdLeadRes">${leadResHtml(T)}</div></div>
+        <div class="sub" id="tdLeadNow" style="margin-bottom:8px">${leadNowHtml(T)}</div><div id="tdPreview">${previewHtml(T)}</div></div></div>`;
+}
+function openTpl(d) {
+  const T = tplTS(); T.draft = d; T.base = tplSig(d); T.prevQ = ''; T.prevId = T.prevId && byId.has(T.prevId) ? T.prevId : '';
+  renderSettings(); const p = prevPerson(T); if (p) ensureInq(p.id);
+}
+async function tWrite(fn) {
+  const S = state.set; if (S.busy) return false;
+  S.busy = true; renderSettings();
+  let ok = true;
+  try { await fn(); } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
+  S.busy = false; renderSettings(); return ok;
+}
+function syncDraft() { const T = tplTS(); if (!T.draft || T.draft.owner_id) return; for (const [id, k] of [['tdName', 'name'], ['tdSubj', 'subject'], ['tdBody', 'body_html']]) { const x = $('#' + id); if (x) T.draft[k] = x.value; } }
+async function tplSave() {
+  const S = state.set, T = tplTS(); if (!T.draft || T.draft.owner_id || S.busy) return;
+  syncDraft(); const d = T.draft, name = d.name.trim();
+  if (!name) return setErr('A template needs a name.');
+  await tWrite(async () => {
+    const row = d.isNew ? await api.addTemplate({ name, subject: d.subject, body_html: d.body_html, owner_id: null, active: true, fub_id: null })
+      : await api.updateTemplate(d.id, { name, subject: d.subject, body_html: d.body_html, updated_at: new Date().toISOString() });
+    T.rows = d.isNew ? [...T.rows, row] : T.rows.map(x => String(x.id) === String(row.id) ? row : x);
+    T.draft = tplDraftOf(row); T.base = tplSig(T.draft); toast('Saved.');
+  });
+}
+async function tplDelete() {
+  const S = state.set, T = tplTS(), d = T.draft; if (!d || d.isNew || d.owner_id || d.fub_id || S.busy) return;
+  let used; try { used = await api.templateInUse(d.id); } catch (e) { toast(e.message || 'Could not check whether an auto response uses this template.'); return; }
+  if (used) { toast('An auto response uses this template.'); return; }
+  showModal(`<h3 id="delText">Delete ${esc(d.name)}? This can't be undone.</h3><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="delGo">Delete</button></div>`);
+  $('#delGo').onclick = async () => {
+    closeModal();
+    await tWrite(async () => { await api.deleteTemplate(d.id); T.rows = T.rows.filter(x => String(x.id) !== String(d.id)); T.draft = null; toast('Deleted.'); });
+  };
+}
+function goSetPage(pg) {
+  const S = state.set, go = () => {
+    const from = S.page; S.page = pg || null; S.edit = null; S.my = null; if (S.tpl) S.tpl.draft = null;
+    if (pg === 'templates' && from !== 'templates') loadTpl(); if (pg === 'system' && from !== 'system') loadHb();
+    renderSettings();
+  };
+  if (!tplDirty()) return go();
+  showModal(`<h3 id="discardText">Discard your changes?</h3><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Keep editing</button><button class="btn primary" id="discardGo">Discard</button></div>`);
+  $('#discardGo').onclick = () => { closeModal(); go(); };
+}
+function pageSystem(S) {
+  const head = subHead('System check', 'Leads come in through each team member\'s lead Gmail. A late check means new leads may be missing.', `<button class="btn small" data-hbrefresh ${S.hbBusy ? 'disabled' : ''}>Refresh</button>`);
+  if (S.hbErr) return head + `<div class="empty-s" id="hbErr">${esc(S.hbErr)}</div>`;
+  if (!S.hb) return head + '<div class="loading-s">Checking…</div>';
+  const rows = sysRows(S), bad = rows.filter(r => r.st !== 'ok');
+  return head + (rows.length ? `<div class="syscheck ${bad.length ? 'bad' : 'ok'}" id="sysSummary"><b>System check:</b> ${bad.length ? `${rows.length - bad.length} of ${rows.length} lead Gmails OK. ${bad.map(r => esc(r.m.full_name.split(' ')[0])).join(', ')} ${bad.length === 1 ? 'needs' : 'need'} a look.` : `All ${rows.length} lead Gmails checked in the last ${HB_LATE_MIN} minutes.`}</div>` : '')
+    + `<div class="section" id="sysList">${rows.map(({ m, h, age, st }) => { const sm = st === 'none' ? '' : hbSummary(h.last_result); return `<div class="sysrow" data-sys="${esc(m.id)}" data-state="${st}"><span class="who">${avatar(m.id, 'sm')}<div style="min-width:0"><div class="name">${esc(m.full_name)}</div><div class="sub">${esc(m.lead_gmail)}</div></div></span>
+      <div class="sysst">${st === 'ok' ? `<span class="okline">✓ Checked ${agoText(age)}</span>` : st === 'late' ? `<span class="warntext">⚠ Checked ${agoText(age)}. New leads may be missing.</span>` : '<span class="warntext">Not connected yet</span>'}${sm ? `<div class="sub">${esc(sm)}</div>` : ''}</div></div>`; }).join('') || '<div class="empty-s">No team member has a lead Gmail yet.</div>'}</div>
+    <p class="sub" id="sysSync" style="margin-top:10px">Follow Up Boss data syncs every night at 2:30 AM from Greg's Mac.</p>`;
+}
 function renderSettings() {
   const el = $('#settingsBody'), S = state.set;
   if (!isMgr()) return;
@@ -2377,8 +2624,8 @@ function renderSettings() {
   let html;
   if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
   else if (!S.loaded) html = '<div class="loading-s">Loading…</div>';
-  else if (!S.page) html = `<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">${SET_PAGES.map(([k, t]) => `<button class="tile" data-setpage="${k}"><span class="k">${t}</span><span class="v">${{ stages: S.stages.length, fields: S.fields.length, tags: S.tags.length, team: S.team.length, about: 'v' + APP_VERSION }[k]}</span><span class="s">${{ stages: 'order, closes the lead', fields: 'labels, order, options', tags: 'who can create tags', team: 'who can sign in', about: 'version and sync' }[k]}</span></button>`).join('')}</div>`;
-  else html = { stages: pageStages, fields: pageFields, tags: pageTags, team: pageTeam, about: pageAbout }[S.page](S);
+  else if (!S.page) html = pageHome(S);
+  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, team: pageTeam, about: pageAbout }[S.page](S);
   const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
   el.innerHTML = html;
   for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm)/.test(id)) x.value = v; }
@@ -2417,7 +2664,35 @@ async function setMember(m, patch) {
 $('#settingsBody').addEventListener('click', async e => {
   const t = e.target, S = state.set, el = (sel) => t.closest(sel);
   if (el('#setRetry')) { S.err = ''; S.loaded = false; openSettings(); return; }
-  const sp = el('[data-setpage]'); if (sp) { S.page = sp.dataset.setpage || null; S.edit = null; renderSettings(); return; }
+  const sp = el('[data-setpage]'); if (sp) { goSetPage(sp.dataset.setpage); return; }
+  const tpk = el('[data-theme-pick]'); if (tpk) {
+    const v = tpk.dataset.themePick; if (tpk.disabled) return;
+    if (await sWrite(async () => { await api.updateMember(state.me.id, { theme: v }); applyTheme(v); })) toast('Saved.'); return;
+  }
+  if (el('[data-mysave]')) {
+    const m = selfRow(), d = S.my = { name: $('#msName').value, phone: $('#msPhone').value, email: $('#msEmail').value };
+    const name = d.name.trim(), em = normEmail(d.email), ph = d.phone.trim();
+    if (!name) return setErr('Enter your full name.');
+    if (em && !EMAIL_OK.test(em)) return setErr('Enter an email like name@example.com.');
+    let phone = null;
+    if (ph) { phone = (ph === fmtPhone(m.phone) || ph === m.phone) ? m.phone : normPhone(ph); if (!phone) return setErr('Enter a 10-digit US number.'); }
+    if (await sWrite(() => api.updateMember(state.me.id, { full_name: name, phone, contact_email: em || null }))) { S.my = null; toast('Saved.'); renderSettings(); }
+    return;
+  }
+  const tf = el('[data-tfilter]'); if (tf) { tplTS().filter = tf.dataset.tfilter; renderSettings(); return; }
+  const to = el('[data-topen]'); if (to) { const r = tplTS().rows.find(x => String(x.id) === to.dataset.topen); if (r) openTpl(tplDraftOf(r)); return; }
+  if (el('[data-tplnew]')) { if (!S.busy) openTpl({ id: null, isNew: true, name: '', subject: '', body_html: '', owner_id: null, fub_id: null }); return; }
+  if (el('[data-tplretry]')) { tplTS().err = ''; loadTpl(); return; }
+  const tk = el('[data-tok]'); if (tk) {
+    const T = tplTS(), ae = document.activeElement, f = $('#' + (ae && (ae.id === 'tdSubj' || ae.id === 'tdBody') ? ae.id : T.last));
+    if (!f || f.disabled || !T.draft) return;
+    const a = f.selectionStart == null ? f.value.length : f.selectionStart, b = f.selectionEnd == null ? a : f.selectionEnd, ins = `{${tk.dataset.tok}}`, pos = a + ins.length;
+    f.value = f.value.slice(0, a) + ins + f.value.slice(b); T.draft[f.dataset.td] = f.value; T.last = f.id; f.focus(); f.setSelectionRange(pos, pos); refreshPrev(); return;
+  }
+  const tl = el('[data-tlead]'); if (tl) { const T = tplTS(); T.prevId = tl.dataset.tlead; T.prevQ = ''; const q = $('#tdLeadQ'); if (q) q.value = ''; refreshPrev(); ensureInq(T.prevId); return; }
+  if (el('[data-tplsave]')) { tplSave(); return; }
+  if (el('[data-tpldel]')) { tplDelete(); return; }
+  if (el('[data-hbrefresh]')) { if (!S.hbBusy) { S.hbBusy = true; renderSettings(); loadHb(); } return; }
   if (el('[data-setcancel]')) { S.edit = null; renderSettings(); return; }
   const mv = el('[data-smove]'); if (mv) { if (!mv.disabled) reorder(mv.dataset.smove, +mv.dataset.i, +mv.dataset.i + +mv.dataset.d); return; }
   if (el('#addStage')) {
@@ -2532,6 +2807,15 @@ $('#settingsBody').addEventListener('change', async e => {
     setMember(m, { can_sign_in: t.checked });
   }
 });
+$('#settingsBody').addEventListener('input', e => {
+  const t = e.target, S = state.set;
+  if (t.dataset.my) { S.my = S.my || {}; S.my[t.dataset.my] = t.value; return; }
+  const T = S.tpl; if (!T) return;
+  if (t.id === 'tplQ') { T.q = t.value; $('#tplRows').innerHTML = tplRowsHtml(T); return; }
+  if (t.dataset.td && T.draft) { T.draft[t.dataset.td] = t.value; if (t.id === 'tdSubj' || t.id === 'tdBody') T.last = t.id; refreshPrev(); return; }
+  if (t.id === 'tdLeadQ') { T.prevQ = t.value; $('#tdLeadRes').innerHTML = leadResHtml(T); }
+});
+$('#settingsBody').addEventListener('focusin', e => { const T = state.set.tpl, id = e.target.id; if (T && (id === 'tdSubj' || id === 'tdBody')) T.last = id; });
 // Drag to reorder (the arrows do the same thing)
 let dndFrom = null;
 $('#settingsBody').addEventListener('dragstart', e => { const r = e.target.closest('[data-dnd]'); if (!r) return; dndFrom = { kind: r.dataset.dnd, i: +r.dataset.i }; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); } catch (_) {} });
