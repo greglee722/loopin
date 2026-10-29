@@ -734,6 +734,23 @@ button.custcard:hover { border-color: var(--accent); }
 .sysrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--line); } .sysrow:last-child { border-bottom: 0; }
 .sysrow .who { flex: 1 1 240px; } .sysrow .who .sub { overflow-wrap: anywhere; } .sysrow .sysst { flex: 1 1 240px; min-width: 0; }
 @media (max-width: 600px) { .custcards { grid-template-columns: minmax(0, 1fr); } }
+/* v2.4 People: description under the title, full page, stepper, small bits */
+#listDesc { margin: -6px 0 10px; max-width: 70ch; } #listDesc:empty { display: none; }
+#listEdited { margin: 0 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rail .n.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.rail .hid { color: var(--ink-3); font-weight: 400; }
+.panel.full { width: 100%; box-shadow: none; }
+.panel.full .panel-head, .panel.full .panel-body { width: min(920px, 100%); margin-inline: auto; }
+.panel.full .panel-head { background: none; border-bottom: 0; }
+.stepper { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
+.stepper .btn.small { padding: 1px 9px; }
+.fpanel .savebar { padding: 0 12px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.fpanel .fnote { padding: 0 12px 12px; font-size: 12.5px; color: var(--ink-3); }
+.fbody .presets { display: flex; flex-wrap: wrap; gap: 5px; }
+.fbody input[type=text], .fbody input[type=date], .fbody input[type=number] { width: 100%; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.settle { pointer-events: none; }
+.listrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.colpop .colitems .colrow .t { overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -786,30 +803,36 @@ button.custcard:hover { border-color: var(--accent); }
   </section>
 
   <section class="view" id="view-people" hidden>
-    <div class="listhead"><h1>People</h1></div>
-    <div class="toolbar" id="toolbar">
-      <select class="btn" id="fAgent" aria-label="Agent" hidden></select>
-      <select class="btn" id="fStage" aria-label="Stage"></select>
-      <select class="btn" id="fZ" aria-label="Zillow account"></select>
-      <button class="btn" id="fUnc" aria-pressed="false">Not contacted (30 days)</button>
-      <button class="btn" id="fDup" aria-pressed="false" hidden></button>
-      <div class="spacer"></div>
-      <div class="countline"><span id="count" aria-live="polite"></span><button class="btn small" id="exportShown" hidden></button><span class="loadmsg" id="loadmsg"></span></div>
+    <div class="people-layout" id="peopleLayout">
+      <aside class="rail" id="rail" aria-label="Smart lists"></aside>
+      <div class="main-col" style="min-width:0">
+        <select class="rail-select" id="railSelect" aria-label="Smart list"></select>
+        <div class="listhead"><h1 id="listTitle">People</h1></div>
+        <div class="sub" id="listDesc"></div>
+        <div class="sub" id="listEdited" hidden>You changed the filters on this list. <button class="btn small" id="listReset">Reset to list</button></div>
+        <div class="toolbar" id="toolbar">
+          <select class="btn" id="fAgent" aria-label="Agent" hidden></select>
+          <select class="btn" id="fStage" aria-label="Stage"></select>
+          <select class="btn" id="fZ" aria-label="Zillow account"></select>
+          <button class="btn" id="fUnc" aria-pressed="false">Not contacted yet</button>
+          <div class="spacer"></div>
+          <div class="countline"><span id="count" aria-live="polite"></span><button class="btn small" id="exportShown" hidden></button><span class="loadmsg" id="loadmsg"></span></div>
+          <div class="popwrap"><button class="btn" id="colBtn" aria-expanded="false">Columns ▾</button><div class="colpop" id="colPop" hidden></div></div>
+          <button class="btn" id="filterBtn" aria-expanded="false">Filters <span class="badge" id="filterCount" hidden></span></button>
+        </div>
+        <div class="sub" id="onlyChip" hidden><span id="onlyText"></span> <button class="btn small" id="onlyClear">Show everyone</button></div>
+        <div class="bulkbar" id="bulkbar" hidden></div>
+        <div class="tablewrap" id="tablewrap">
+          <table>
+            <thead id="thead"></thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="empty" id="empty" hidden>No people match these filters.</div>
+        </div>
+        <div class="more" id="more" hidden><button class="btn" id="moreBtn">Show 100 more</button></div>
+      </div>
+      <aside class="fpanel" id="fpanel" aria-label="Filters" hidden></aside>
     </div>
-    <div class="sub" id="onlyChip" hidden><span id="onlyText"></span> <button class="btn small" id="onlyClear">Show everyone</button></div>
-    <div class="bulkbar" id="bulkbar" hidden></div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr>
-          <th class="c-check"><input type="checkbox" id="checkAll" aria-label="Select the people shown"></th><th class="c-name">Name</th><th>Contacted</th><th>Agent</th><th>Phone</th><th>Email</th><th>Stage</th><th>Source</th><th id="thZ">Zillow account</th>
-          <th class="num-col" id="thCreated" aria-sort="descending"><button class="sortbtn" data-sort="created">Created</button></th>
-          <th class="num-col" id="thActivity" aria-sort="none"><button class="sortbtn" data-sort="activity">Last activity</button></th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div class="empty" id="empty" hidden>No people match these filters.</div>
-    </div>
-    <div class="more" id="more" hidden><button class="btn" id="moreBtn">Show 100 more</button></div>
   </section>
 </main>
 
@@ -831,6 +854,7 @@ const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
+const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
@@ -850,7 +874,7 @@ function makeApi(url, key) {
     },
     async signOut() { ok(await sb.auth.signOut()); },
     async me(userId) {
-      return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export,theme')
+      return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export,theme,people_columns')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
     async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on')); },
@@ -925,7 +949,7 @@ function makeApi(url, key) {
     async updateNote(id, body) { return ok(await sb.from('notes').update({ body }).eq('id', id).select(NOTE_COLS).single()); },
     async deleteNote(id) { gone(await sb.from('notes').delete().eq('id', id).select('id')); },
     async tags() { return ok(await sb.from('tags').select('name').order('name')); },
-    async settings() { return ok(await sb.from('team_settings').select('agents_create_tags').eq('id', 1).maybeSingle()); },
+    async settings() { return ok(await sb.from('team_settings').select('agents_create_tags,people_columns').eq('id', 1).maybeSingle()); },
     async listings() {
       return ok(await sb.from('zillow_listings').select('id,zillow_account,property_id,listing_address,status,expires_on,last_notice_at,last_notice_kind,notices,dismissed_at,dismissed_reason,dismissed_by,created_at').order('expires_on', { nullsFirst: false }));
     },
@@ -971,6 +995,14 @@ function makeApi(url, key) {
     async addNote(personId, meId, body) {
       return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: 'note', body }).select(NOTE_COLS).single());
     },
+    // v2.4: People columns and smart lists. Row-level security turns a refused UPDATE into 0 rows (no error), so these return the rows and the caller checks for 0.
+    // Columns are { cols: [column keys, Name first] } or null (null = use the next level: own, then team default, then built-in).
+    async saveMyColumns(memberId, value) { return ok(await sb.from('team_members').update({ people_columns: value }).eq('id', memberId).select('id')); },   // only a manager passes team_manage today
+    async setTeamColumns(value) { return ok(await sb.from('team_settings').update({ people_columns: value }).eq('id', 1).select('id')); },
+    async smartLists() { return ok(await sb.from('smart_lists').select(LIST_COLS).order('sort_order').order('name').order('id')); },
+    async addSmartList(row) { return ok(await sb.from('smart_lists').insert(row).select(LIST_COLS).single()); },
+    async updateSmartList(id, patch) { return ok(await sb.from('smart_lists').update(patch).eq('id', id).select(LIST_COLS)); },
+    async deleteSmartList(id) { gone(await sb.from('smart_lists').delete().eq('id', id).select('id')); },
     // v2.3 (supabase/12): possible duplicates and merge. Managers only; the database refuses anyone else.
     async duplicateDismissals() {
       const out = [];
@@ -1046,7 +1078,9 @@ const state = {
   userId: null, user: null, me: null,
   team: [], teamMap: new Map(), colors: new Map(),
   stages: [], stageMap: new Map(), fields: [],
-  q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '',
+  q: '', zOn: true, zSig: '',
+  sl: 'all', filters: [], lists: [], listsVer: 0, listsErr: '', showF: false,   // v2.4: the chosen list, the filters on screen, the smart_lists rows
+  colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, openedAt: 0,   // columns, full page, Person X of N
   sort: { key: 'created', dir: 'desc' }, limit: SHOW,
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
@@ -1074,6 +1108,8 @@ function prep(r) {
   r._dg = (r.person_phones || []).map(p => String(p.phone).replace(/\D/g, '')).join(' ');
   r._c = Date.parse(r.created_at) || 0;
   r._a = Date.parse(r.last_activity_at) || 0;
+  r._ck = r.created_at ? localKey(r.created_at) : '';        // local dates, for the Created and Last activity filters
+  r._ak = r.last_activity_at ? localKey(r.last_activity_at) : '';
   return r;
 }
 function setRow(r) {
@@ -1159,7 +1195,7 @@ async function doSignOut() {
 function resetApp() {
   loadGen++;
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
-  Object.assign(state, { userId: null, user: null, me: null, q: '', agent: '', stage: '', unc: false, zacct: '', zOn: true, zSig: '', limit: SHOW,
+  Object.assign(state, { userId: null, user: null, me: null, q: '', zOn: true, zSig: '', limit: SHOW, sl: 'all', filters: [], lists: [], listsVer: 0, listsErr: '', showF: false, colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, openedAt: 0,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
@@ -1167,7 +1203,7 @@ function resetApp() {
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
     rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
     dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
-  inqCache.clear(); state.sel.clear(); applyTheme(null);
+  inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
   $('#search').value = '';
   closeModal();
 }
@@ -1196,11 +1232,13 @@ async function start(session) {
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   state.loading = true;
   state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
+  state.colOwn = parseCols(me.people_columns);
   renderMe(); renderFilters(); setChrome(true);
   loadPeople(myGen); loadAppts(); loadHits(); loadListings(); loadSyncFrom();
   if (me.role === 'manager') loadDismissals(myGen);
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
-  api.settings().then(r => { if (myGen === loadGen) state.agentTags = !!(r && r.agents_create_tags); }).catch(() => {});
+  api.settings().then(r => { if (myGen === loadGen) { state.agentTags = !!(r && r.agents_create_tags); state.colTeam = parseCols(r && r.people_columns); if (state.view === 'people') renderList(); } }).catch(() => {});
+  loadLists(myGen);
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
   if (!/^#p\//.test(location.hash) && /^#p\/[0-9a-f-]{36}$/i.test(back)) { try { history.replaceState(null, '', location.href.split('#')[0] + back); } catch (_) {} }
   route();
@@ -1219,11 +1257,11 @@ async function pageCall(after) {
   try { return await api.peoplePage(after); }
   catch (e) {
     if (!state.zOn || !isMissingZ(e)) throw e;
-    state.zOn = false; state.zacct = ''; api.setZillow(false); applyZ();
+    state.zOn = false; state.filters = state.filters.filter(f => f.key !== 'zacct'); api.setZillow(false); applyZ();
     return await api.peoplePage(after);
   }
 }
-function applyZ() { $('#thZ').hidden = !state.zOn; $('#fZ').hidden = !state.zOn; }
+function applyZ() { $('#fZ').hidden = !state.zOn; }   // the Zillow account column hides itself: colDef returns nothing while the column is missing
 async function loadPeople(gen, after = null) {
   state.loading = true; state.loadFailed = false; state.loadErr = '';
   renderLoad();
@@ -1275,15 +1313,389 @@ function renderLoad() {
 }
 
 // ───────── People list ─────────
+// ───── The filter shape (v2.4). One definition for the app, smart_lists.filters and supabase/13-smart-lists-seed.sql. ─────
+//   smart_lists.filters = [ filter, ... ]   A lead is on the list when ALL filters match. [] = every lead.
+//   filter = { key, op, vals?, from?, to?, rel?, text? }
+//     key   stage | agent | source | created | updated | tags | reason | contacted | phone | zacct | custom:<custom_field_defs.key>
+//     op    any / none         vals = the chosen values. stage: stage ids (numbers). agent: a member id, or "unassigned".
+//                              reason: a key of REASONS ("future_move_in"). source, tags, zacct and custom choices: the text.
+//                              An empty vals matches everyone.
+//           empty / notempty   no other property
+//           between            number fields: from, to (either may be left out).
+//                              date fields (created, updated, custom date): from, to as "YYYY-MM-DD", or rel (below).
+//                              custom date range fields (Move-in): matches when the lead's range overlaps from..to.
+//           contains           text (custom text fields)
+//           yes / no           contacted, phone, custom yes/no fields
+//     rel   [a, b]  a window counted in days from today, so it never goes stale. null end = open.
+//           [-29, 0] = the last 30 days. [0, 45] = the next 45 days. rel replaces from and to.
+//   Unknown key or op: the filter matches nobody and shows as unavailable (see checkFilters).
+const NO_AGENT = 'unassigned';
+const CF = 'custom:';
+const FTYPE_OF = { dropdown: 'choice', multiselect: 'choice', yesno: 'yesno', number: 'number', date: 'date', daterange: 'daterange', text: 'text' };
+const FOPS = {
+  choice: [['any', 'is any of'], ['none', 'is not any of'], ['empty', 'is empty'], ['notempty', 'is not empty']],
+  date: [['between', 'is between'], ['empty', 'is empty'], ['notempty', 'is not empty']],
+  daterange: [['between', 'overlaps'], ['empty', 'is empty'], ['notempty', 'is not empty']],
+  number: [['between', 'is between'], ['empty', 'is empty'], ['notempty', 'is not empty']],
+  text: [['contains', 'contains'], ['empty', 'is empty'], ['notempty', 'is not empty']],
+  yesno: [['yes', 'yes'], ['no', 'no']],
+};
+const isYes = (v) => v === true || v === 'true';
+const arrOf = (v) => Array.isArray(v) ? v : isBlank(v) ? [] : [v];
+// Built-in filters. get(p) reads a loaded person. Custom fields are built from state.fields by type (fdef).
+const FBUILT = {
+  stage: { label: 'Stage', type: 'choice', num: true, get: (p) => p.stage_id == null ? [] : [p.stage_id] },
+  agent: { label: 'Agent', type: 'choice', mgr: true, noEmpty: true, get: (p) => [p.owner_id || NO_AGENT] },
+  source: { label: 'Source', type: 'choice', get: (p) => p.source ? [p.source] : [] },
+  created: { label: 'Created', type: 'date', past: true, get: (p) => p._ck },
+  updated: { label: 'Last activity', type: 'date', past: true, get: (p) => p._ak },
+  tags: { label: 'Tags', type: 'choice', get: (p) => p.tags || [] },
+  reason: { label: 'Non-workable reason', type: 'choice', get: (p) => p.nonworkable_reason ? [p.nonworkable_reason] : [] },
+  contacted: { label: 'Contacted', type: 'yesno', get: (p) => !!p.contacted_at },
+  phone: { label: 'Has a phone', type: 'yesno', get: (p) => (p.person_phones || []).length > 0 },
+  zacct: { label: 'Zillow account', type: 'choice', z: true, get: (p) => p.zillow_account ? [p.zillow_account] : [] },
+};
+function fdef(key) {
+  key = String(key || '');
+  if (key.startsWith(CF)) {
+    const f = state.fields.find(x => x.key === key.slice(CF.length));
+    return f ? { label: f.label, type: FTYPE_OF[f.type] || 'text', options: f.options || [], custom: true, get: (p) => (p.custom || {})[f.key] } : null;
+  }
+  const d = FBUILT[key];
+  return d && !(d.z && !state.zOn) ? d : null;
+}
+// The filters offered under "Add a filter", in this order.
+function fkeys() {
+  return [...Object.keys(FBUILT).filter(k => fdef(k) && (!FBUILT[k].mgr || isMgr())), ...state.fields.map(f => CF + f.key)];
+}
+const dateKey = (v) => { const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v == null ? '' : v)); return m ? m[1] : ''; };
+const numOrNull = (v) => v === '' || v == null || isNaN(+v) ? null : +v;
+// The window of a date filter as two "YYYY-MM-DD" strings ('' = open).
+function fwindow(f) {
+  if (Array.isArray(f.rel)) { const k = (d) => d == null || d === '' ? '' : localKey(+dayStart(+d)); return [k(f.rel[0]), k(f.rel[1])]; }
+  return [dateKey(f.from), dateKey(f.to)];
+}
+const NEVER = () => false;
+// One filter as a test function. Compile once, then run it over the people.
+function compileFilter(f) {
+  const d = fdef(f.key); if (!d || !f || !FOPS[d.type].some(o => o[0] === f.op) || (d.noEmpty && (f.op === 'empty' || f.op === 'notempty'))) return NEVER;
+  const get = d.get, op = f.op, t = d.type;
+  if (t === 'yesno') { const yes = op === 'yes'; return (p) => isYes(get(p)) === yes; }
+  if (op === 'empty') return (p) => isBlank(get(p));
+  if (op === 'notempty') return (p) => !isBlank(get(p));
+  if (t === 'choice') {
+    const set = new Set((Array.isArray(f.vals) ? f.vals : []).map(String));
+    if (!set.size) return () => true;
+    return op === 'any' ? (p) => arrOf(get(p)).some(x => set.has(String(x))) : (p) => !arrOf(get(p)).some(x => set.has(String(x)));
+  }
+  if (t === 'text') { const q = String(f.text || '').trim().toLowerCase(); return q ? (p) => String(get(p) == null ? '' : get(p)).toLowerCase().includes(q) : () => true; }
+  if (t === 'number') {
+    const lo = numOrNull(f.from), hi = numOrNull(f.to); if (lo == null && hi == null) return () => true;
+    return (p) => { const v = get(p); if (isBlank(v)) return false; const n = +v; return !isNaN(n) && (lo == null || n >= lo) && (hi == null || n <= hi); };
+  }
+  const [from, to] = fwindow(f); if (from === '' && to === '') return () => true;
+  if (t === 'date') return (p) => { const v = dateKey(get(p)); return v !== '' && (from === '' || v >= from) && (to === '' || v <= to); };
+  // Date range: the lead's range touches the window (Dec 10-31 catches a Dec 1-15 move-in).
+  return (p) => {
+    const v = get(p); let a, b;
+    if (v && typeof v === 'object') { a = dateKey(v.from); b = dateKey(v.to); } else a = b = dateKey(v);
+    if (!a) a = b; if (!b) b = a; if (!a) return false;
+    return (from === '' || b >= from) && (to === '' || a <= to);
+  };
+}
+function compileFilters(arr) {
+  const tests = (arr || []).map(compileFilter);
+  return tests.length ? (p) => { for (let i = 0; i < tests.length; i++) if (!tests[i](p)) return false; return true; } : () => true;
+}
+// The saved form of a filter: only the properties its op uses, in a fixed order. Also used to see whether a list was changed.
+function canon(f) {
+  const o = { key: f.key, op: f.op };
+  if ((f.op === 'any' || f.op === 'none') && Array.isArray(f.vals) && f.vals.length) o.vals = f.vals.slice();
+  if (f.op === 'between') {
+    if (Array.isArray(f.rel)) o.rel = f.rel.slice();
+    else { if (f.from !== undefined && f.from !== null && f.from !== '') o.from = f.from; if (f.to !== undefined && f.to !== null && f.to !== '') o.to = f.to; }
+  }
+  if (f.op === 'contains' && f.text) o.text = f.text;
+  return o;
+}
+const canonAll = (arr) => (arr || []).map(canon);
+// Problems with a saved filter list, in words. An empty result means the app can read it.
+function checkFilters(arr) {
+  const bad = [];
+  if (!Array.isArray(arr)) return ['filters is not a list'];
+  arr.forEach((f, i) => {
+    const w = `filter ${i + 1}`;
+    if (!f || typeof f !== 'object' || Array.isArray(f)) { bad.push(`${w} is not an object`); return; }
+    const d = fdef(f.key);
+    if (!d) { bad.push(`${w}: unknown key "${f.key}"`); return; }
+    if (!FOPS[d.type].some(o => o[0] === f.op) || (d.noEmpty && (f.op === 'empty' || f.op === 'notempty'))) { bad.push(`${w}: "${f.op}" does not fit ${f.key}`); return; }
+    if ((f.op === 'any' || f.op === 'none') && f.vals !== undefined && !Array.isArray(f.vals)) bad.push(`${w}: vals is not a list`);
+    if (f.rel !== undefined && f.rel !== null && !(Array.isArray(f.rel) && f.rel.length === 2 && f.rel.every(x => x === null || Number.isInteger(x)))) bad.push(`${w}: rel must be [days, days]`);
+    if (f.key === 'stage' && Array.isArray(f.vals) && f.vals.some(x => !Number.isInteger(x))) bad.push(`${w}: stage values must be stage ids`);
+  });
+  return bad;
+}
+function relText(rel) {
+  const [a, b] = rel;
+  if (b === 0 && a === 0) return 'today';
+  if (b === 0 && a != null && a < 0) return `in the last ${1 - a} days`;
+  if (a === 0 && b != null && b > 0) return `in the next ${b} days`;
+  return `from ${a == null ? 'any time' : a + ' days'} to ${b == null ? 'any time' : b + ' days'} from today`;
+}
+// Value options for a choice filter: [value, label] pairs.
+let srcMemo = null;
+function sourceSets() {
+  if (srcMemo && srcMemo.ver === state.dupVer && srcMemo.zOn === state.zOn) return srcMemo;
+  const src = new Set(), acc = new Set(), tg = new Set(state.tags);
+  for (const p of all) { if (p.source) src.add(p.source); if (p.zillow_account) acc.add(p.zillow_account); for (const t of p.tags || []) tg.add(t); }
+  return srcMemo = { ver: state.dupVer, zOn: state.zOn, src: [...src].sort(), acc: [...acc].sort(), tags: [...tg].sort() };
+}
+function foptions(key) {
+  const d = fdef(key); if (!d) return [];
+  if (key === 'stage') return state.stages.map(s => [s.id, s.name]);
+  if (key === 'agent') return [[NO_AGENT, 'Unassigned'], ...state.team.map(m => [m.id, m.full_name + (m.active ? '' : ' (inactive)')])];
+  if (key === 'source') return sourceSets().src.map(x => [x, x]);
+  if (key === 'tags') return sourceSets().tags.map(x => [x, x]);
+  if (key === 'zacct') return sourceSets().acc.map(x => [x, zLocal(x)]);
+  if (key === 'reason') return Object.entries(REASONS);
+  return (d.options || []).map(x => [x, x]);
+}
+function fvalLabel(key, v) {
+  if (key === 'stage') { const s = state.stageMap.get(+v); return s ? s.name : 'a removed stage'; }
+  if (key === 'agent') return v === NO_AGENT ? 'Unassigned' : (memberName(v) || 'a former member');
+  if (key === 'reason') return REASONS[v] || String(v);
+  if (key === 'zacct') return zLocal(v);
+  return String(v);
+}
+function describeFilter(f) {
+  const d = fdef(f.key); if (!d) return `Unavailable filter (${f.key})`;
+  const L = d.label, op = f.op;
+  if (d.type === 'yesno') return `${L}: ${op === 'yes' ? 'yes' : 'no'}`;
+  if (op === 'empty') return `${L} is empty`;
+  if (op === 'notempty') return `${L} is filled in`;
+  if (d.type === 'choice') {
+    const v = (f.vals || []).map(x => fvalLabel(f.key, x)).join(', ');
+    return v ? `${L} ${op === 'any' ? 'is any of' : 'is not any of'}: ${v}` : `${L} (pick values)`;
+  }
+  if (d.type === 'text') return f.text ? `${L} contains "${f.text}"` : `${L} (type text)`;
+  if (Array.isArray(f.rel)) return `${L} ${relText(f.rel)}`;
+  const isD = d.type !== 'number', fmt = (v) => isD ? fmtDate(v) : f.key === CF + 'budget' ? money(v) : v;
+  const a = f.from === undefined || f.from === null ? '' : f.from, b = f.to === undefined || f.to === null ? '' : f.to;
+  if (a !== '' && b !== '') return `${L} from ${fmt(a)} to ${fmt(b)}`;
+  if (a !== '') return `${L} from ${fmt(a)}`;
+  if (b !== '') return `${L} up to ${fmt(b)}`;
+  return `${L} (any)`;
+}
+let fseq = 0;
+// The filters on screen carry an id and an open flag for the panel. Neither is ever saved.
+const uiFilters = (arr) => (Array.isArray(arr) ? arr : []).filter(f => f && typeof f === 'object').map(f => ({ vals: [], ...JSON.parse(JSON.stringify(f)), id: ++fseq, open: false }));
+const closingIds = () => state.stages.filter(s => s.closes_lead).map(s => s.id);
+
+// ───── Smart lists ─────
+const BUILTIN = {
+  all: { id: 'all', name: 'All People', desc: 'Every lead you can see.', filters: () => [] },
+  unc: { id: 'unc', name: 'Not contacted yet', desc: 'New leads nobody has reached out to yet, in any open stage. Check Contacted once you call or text them.',
+    filters: () => [{ key: 'contacted', op: 'no' }, { key: 'stage', op: 'none', vals: closingIds() }] },
+  dups: { id: 'dups', name: 'Possible duplicates', desc: 'Leads that look like the same person. Open one to review the merge.', filters: () => [] },
+};
+const bySort = (a, b) => (a.sort_order - b.sort_order) || String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id));
+const teamLists = () => state.lists.filter(l => !l.owner_id && (isMgr() || !l.hidden_from_agents)).sort(bySort);
+const myLists = () => state.lists.filter(l => l.owner_id && state.me && l.owner_id === state.me.id).sort(bySort);   // a manager can read agents' lists; never show them
+const listOf = (id) => BUILTIN[id] || state.lists.find(l => l.id === id) || null;
+const listFilters = (l) => !l ? [] : typeof l.filters === 'function' ? l.filters() : Array.isArray(l.filters) ? l.filters : [];
+const listDesc = (l) => !l ? '' : l.desc != null ? l.desc : (l.description || '');
+const curList = () => listOf(state.sl) || BUILTIN.all;
+const listEdited = () => state.sl !== 'all' && state.sl !== 'dups' && JSON.stringify(canonAll(listFilters(curList()))) !== JSON.stringify(canonAll(state.filters));
+// The count of every list, in one pass over `all`. Remembered until a person, a list, a stage or the day changes.
+let cntMemo = null;
+function listCounts() {
+  const sig = [state.dupVer, state.listsVer, closingIds().join(), state.fields.length, state.zOn, state.me && state.me.id, localKey(Date.now())].join('|');
+  if (cntMemo && cntMemo.sig === sig) return cntMemo.n;
+  if (cntMemo && state.loading && Date.now() - cntMemo.at < 1000) return cntMemo.n;   // while the pages still arrive, recount at most once a second
+  const ls = [BUILTIN.unc, ...teamLists(), ...myLists()].map(l => ({ id: l.id, test: compileFilters(listFilters(l)) }));
+  const n = { all: 0 }; ls.forEach(l => { n[l.id] = 0; });
+  for (const p of all) { if (p.merged_into) continue; n.all++; for (const l of ls) if (l.test(p)) n[l.id]++; }
+  cntMemo = { sig, n, at: Date.now() };
+  return n;
+}
+function renderRail() {
+  const n = listCounts(), dn = dupInfo().groups.length, showDup = state.dupOn && isMgr() && dn > 0;
+  const btn = (l, hid) => `<button data-sl="${esc(l.id)}" aria-pressed="${state.sl === l.id}"><span class="lbl"><span>${esc(l.name)}${hid ? ' <span class="hid">(hidden)</span>' : ''}</span></span><span class="n">${(n[l.id] || 0).toLocaleString('en-US')}</span></button>`;
+  const team = teamLists(), mine = myLists();
+  let html = `<div class="railhead">People</div>${btn(BUILTIN.all)}${btn(BUILTIN.unc)}`;
+  html += `<h3>Smart lists</h3>` + (team.map(l => btn(l, isMgr() && l.hidden_from_agents)).join('') || `<div class="sub" style="padding:2px 14px 8px">${state.listsErr ? 'The lists could not load.' : 'No team lists yet.'}</div>`);
+  if (showDup) html += `<button id="fDup" data-sl="dups" aria-pressed="${state.sl === 'dups'}"><span class="lbl"><span>Possible duplicates (${plural(dn, 'group', 'groups')})</span></span></button>`;
+  html += `<h3>My lists</h3>` + (mine.map(l => btn(l)).join('') || '<div class="sub" style="padding:2px 14px 8px">Add filters, then "Save as new list."</div>');
+  $('#rail').innerHTML = html;
+  const opt = (l, label) => `<option value="${esc(l.id)}" ${state.sl === l.id ? 'selected' : ''}>${esc(label || l.name)} (${(n[l.id] || 0).toLocaleString('en-US')})</option>`;
+  $('#railSelect').innerHTML = opt(BUILTIN.all) + opt(BUILTIN.unc) + team.map(l => opt(l)).join('') + (showDup ? `<option value="dups" ${state.sl === 'dups' ? 'selected' : ''}>Possible duplicates (${plural(dn, 'group', 'groups')})</option>` : '') + mine.map(l => opt(l, l.name + ' (mine)')).join('');
+}
+// Choose a list: its filters replace whatever is on screen.
+function pickList(id) {
+  let l = listOf(id);
+  if (!l || (id === 'dups' && !(state.dupOn && isMgr()))) { l = BUILTIN.all; id = 'all'; }
+  state.sl = id; state.dup = id === 'dups';
+  state.filters = uiFilters(listFilters(l));
+  syncQuick(); if (state.showF) renderFPanel();
+  filterChanged();
+}
+async function loadLists(gen) {
+  try {
+    const rows = await api.smartLists();
+    if (gen !== loadGen) return;
+    state.lists = rows || []; state.listsErr = '';
+  } catch (e) { if (gen !== loadGen) return; state.listsErr = e.message || 'The lists could not load.'; }
+  state.listsVer++;
+  if (!listOf(state.sl)) { state.sl = 'all'; state.filters = []; }
+  if (state.view === 'people') renderList(); else if (state.view === 'settings' && state.set.page === 'lists') renderSettings();
+}
+
+// ───── Quick filters (the four selects in the toolbar write into state.filters) ─────
+const qFind = (key, op) => state.filters.find(f => f.key === key && f.op === op);
+function qGet(key) { const f = qFind(key, 'any'); return f && Array.isArray(f.vals) && f.vals.length === 1 ? String(f.vals[0]) : ''; }
+function qSet(key, v) {
+  state.filters = state.filters.filter(f => !(f.key === key && ((f.op === 'any' && (f.vals || []).length <= 1) || f.op === 'empty')));
+  if (v === '__none') state.filters.push({ id: ++fseq, open: false, key, op: 'empty', vals: [] });
+  else if (v !== '') state.filters.push({ id: ++fseq, open: false, key, op: 'any', vals: [key === 'stage' ? +v : v] });
+}
+const closedFilter = () => state.filters.find(f => f.key === 'stage' && f.op === 'none' && JSON.stringify((f.vals || []).slice().sort()) === JSON.stringify(closingIds().sort()));
+function syncQuick() {
+  const mgr = state.me && isMgr();
+  $('#fAgent').value = qGet('agent');
+  $('#fStage').value = qGet('stage');
+  const z = qFind('zacct', 'empty') ? '__none' : qGet('zacct'); if ($('#fZ').querySelector(`option[value="${CSS.escape(z)}"]`)) $('#fZ').value = z;
+  const unc = !!qFind('contacted', 'no');
+  $('#fUnc').setAttribute('aria-pressed', String(unc)); $('#fUnc').textContent = 'Not contacted yet';
+  const n = state.filters.length; $('#filterCount').hidden = !n; $('#filterCount').textContent = n;
+  $('#filterBtn').setAttribute('aria-expanded', String(state.showF));
+  void mgr;
+}
+
+// ───── Columns ─────
+// A column: label, category, sort(p) (null = blank, always last), cell(p) html, first = the direction of the first click on its header.
+const cellText = (v) => v ? esc(v) : '<span class="sub">—</span>';
+const COLS_STATIC = {
+  name: { label: 'Name', cat: 'details', first: 'asc', sort: (p) => p._name.toLowerCase() || null },
+  contacted: { label: 'Contacted', cat: 'details', first: 'desc', sort: (p) => p.contacted_at ? Date.parse(p.contacted_at) : null, cell: (p) => contactedBox(p, true) },
+  agent: { label: 'Agent', cat: 'assigned', first: 'asc', sort: (p) => p.owner_id ? memberName(p.owner_id).toLowerCase() || null : null, cell: (p) => ownerChip(p) },
+  phone: { label: 'Number', cat: 'details', first: 'asc', sort: (p) => { const x = (p.person_phones || [])[0]; return x ? String(x.phone).replace(/\D/g, '') : null; },
+    cell: (p) => { const ph = (p.person_phones || [])[0]; return ph ? numLink(ph.phone, 'num') : '<span class="sub">none yet</span>'; } },
+  email: { label: 'Email', cat: 'details', first: 'asc', sort: (p) => { const e = bestEmail(p); return e ? e.email.toLowerCase() : null; },
+    cell: (p) => { const em = bestEmail(p); return em ? `<a class="email maillink" href="mailto:${esc(em.email)}" title="${esc(em.email)}">${esc(em.email)}</a>${em.is_relay ? ' <span class="pill info">Zillow relay</span>' : ''}` : '<span class="sub">none</span>'; } },
+  stage: { label: 'Stage', cat: 'details', first: 'asc', sort: (p) => { const s = stageOf(p); return s ? s.sort_order : null; }, cell: (p) => stageSelect(p, 'Stage for ' + (p._name || 'this person')) },
+  source: { label: 'Source', cat: 'details', first: 'asc', sort: (p) => p.source ? p.source.toLowerCase() : null, cell: (p) => esc(p.source) },
+  zacct: { label: 'Zillow account', cat: 'details', first: 'asc', sort: (p) => p.zillow_account ? p.zillow_account.toLowerCase() : null,
+    cell: (p) => p.zillow_account ? `<span title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span>` : '<span class="sub">—</span>' },
+  created: { label: 'Created', cat: 'details', first: 'desc', th: 'thCreated', numc: true, sort: (p) => p._c || null, cell: (p) => `<span class="num">${esc(fmtShort(p.created_at))}</span>` },
+  activity: { label: 'Last activity', cat: 'details', first: 'desc', th: 'thActivity', numc: true, sort: (p) => p._a || null, cell: (p) => `<span class="num" title="${esc(fmtShort(p.last_activity_at))}">${esc(rel(p.last_activity_at))}</span>` },
+  tags: { label: 'Tags', cat: 'details', first: 'asc', sort: (p) => (p.tags || []).join(', ').toLowerCase() || null,
+    cell: (p) => (p.tags || []).length ? `<span class="tags">${p.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : '<span class="sub">—</span>' },
+  reason: { label: 'Non-workable reason', cat: 'details', first: 'asc', sort: (p) => p.nonworkable_reason ? (REASONS[p.nonworkable_reason] || p.nonworkable_reason).toLowerCase() : null,
+    cell: (p) => p.nonworkable_reason ? `<span class="pill bad">${esc(REASONS[p.nonworkable_reason] || p.nonworkable_reason)}</span>` : '<span class="sub">—</span>' },
+};
+COLS_STATIC.zacct.th = 'thZ';
+function colDef(key) {
+  if (String(key).startsWith(CF)) {
+    const f = state.fields.find(x => x.key === key.slice(CF.length)); if (!f) return null;
+    const sort = f.type === 'number' ? (p) => { const v = (p.custom || {})[f.key]; return isBlank(v) || isNaN(+v) ? null : +v; }
+      : f.type === 'date' ? (p) => dateKey((p.custom || {})[f.key]) || null
+      : f.type === 'daterange' ? (p) => { const v = (p.custom || {})[f.key]; return dateKey(v && typeof v === 'object' ? v.from || v.to : v) || null; }
+      : f.type === 'yesno' ? (p) => { const v = (p.custom || {})[f.key]; return isBlank(v) && v !== false ? null : isYes(v) ? 1 : 0; }
+      : (p) => { const v = (p.custom || {})[f.key]; return isBlank(v) ? null : String(Array.isArray(v) ? v.join(', ') : v).toLowerCase(); };
+    return { key, label: f.label, cat: 'custom', first: f.type === 'number' || f.type === 'date' || f.type === 'daterange' ? 'desc' : 'asc', sort, cell: (p) => fieldValue(f, (p.custom || {})[f.key]) };
+  }
+  const d = COLS_STATIC[key]; if (!d || (key === 'zacct' && !state.zOn)) return null;
+  return Object.assign({ key }, d);
+}
+const COLCATS = [{ id: 'details', label: 'Details' }, { id: 'assigned', label: 'Assigned' }, { id: 'custom', label: 'Custom fields' }, { id: 'order', label: 'Column order' }];
+const allColKeys = () => [...Object.keys(COLS_STATIC), ...state.fields.map(f => CF + f.key)].filter(k => colDef(k));
+const DEFAULT_COLS = ['name', 'contacted', 'agent', 'phone', 'email', 'stage', 'source', 'zacct', 'created', 'activity'];
+// Saved as { cols: [keys] } (a null column in the database means: use the next level).
+const parseCols = (v) => { const a = Array.isArray(v) ? v : v && Array.isArray(v.cols) ? v.cols : null; return a ? a.filter(x => typeof x === 'string') : null; };
+function effCols() {
+  const src = state.colOwn || state.colTeam || DEFAULT_COLS, seen = new Set(), out = ['name'];
+  seen.add('name');
+  for (const k of src) if (!seen.has(k) && colDef(k)) { seen.add(k); out.push(k); }
+  return out;
+}
+function saveMyCols(arr) {
+  const v = arr ? { cols: arr.slice() } : null, gen = loadGen;
+  colQ = colQ.then(async () => {
+    try {
+      const r = await api.saveMyColumns(state.me.id, v);
+      if (gen !== loadGen) return;
+      if (!r || !r.length) throw Object.assign(new Error('refused'), { soft: true });   // row-level security: only a manager may update team_members today
+      state.colsLocal = false;
+    } catch (e) {
+      if (gen !== loadGen) return;
+      state.colsLocal = true;   // the choice stays for this session
+      if (isMgr()) toast('Your column choice is changed here, but it did not save. ' + (e.soft ? '' : e.message));
+    }
+  });
+}
+let colQ = Promise.resolve();
+function setOwnCols(arr) { state.colOwn = arr; saveMyCols(arr); renderColPop(); renderList(); }
+function moveCol(from, to) {
+  const cols = effCols(); if (to == null || to === '' || +from === +to) return;
+  const [c] = cols.splice(+from, 1); cols.splice(+to, 0, c);
+  setOwnCols(['name', ...cols.filter(k => k !== 'name')]);
+}
+function renderColPop() {
+  const cols = effCols(), cat = state.colCat;
+  const cats = COLCATS.map(c => {
+    const n = c.id === 'order' ? 0 : cols.filter(k => (colDef(k) || {}).cat === c.id).length;
+    return `<button data-cat="${c.id}" aria-pressed="${cat === c.id}">${esc(c.label)}${n ? ` (${n})` : ''}</button>`;
+  }).join('');
+  let items;
+  if (cat === 'order') {
+    items = `<div class="colnote">Drag a row, or use the arrows. Left to right in the table follows top to bottom here. Name always stays first.</div>` + cols.map((k, j) => k === 'name'
+      ? `<div class="colrow"><span class="grip" aria-hidden="true" style="opacity:.3">⋮⋮</span><span class="t">Name <span class="sub">(pinned)</span></span></div>`
+      : `<div class="colrow" draggable="true" data-i="${j}" data-colkey="${esc(k)}"><span class="grip" aria-hidden="true">⋮⋮</span><span class="t">${esc(colDef(k).label)}</span>
+        <span class="arrows"><button data-move="${j}" data-to="${j > 1 ? j - 1 : ''}" ${j <= 1 ? 'disabled' : ''} aria-label="Move ${esc(colDef(k).label)} up">▲</button><button data-move="${j}" data-to="${j < cols.length - 1 ? j + 1 : ''}" ${j === cols.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(colDef(k).label)} down">▼</button></span></div>`).join('')
+      + `<div class="colnote">${isMgr() ? 'Make this the team default to set the columns and order every agent starts with.' : 'Your manager sets the team default. Changes here only affect your view.'}</div>
+      <div class="row" style="justify-content:flex-end;padding-top:4px">${isMgr() ? '<button class="btn small primary" id="colTeam">Make this the team default</button>' : ''}<button class="btn small" id="colReset" ${state.colOwn ? '' : 'disabled'}>Reset to team default</button></div>`;
+  } else {
+    items = allColKeys().filter(k => colDef(k).cat === cat).map(k => `<label><input type="checkbox" data-coltoggle="${esc(k)}" ${cols.includes(k) ? 'checked' : ''} ${k === 'name' ? 'disabled' : ''}>${esc(colDef(k).label)}${state.sort.key === k ? (state.sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}</label>`).join('')
+      || '<div class="colnote">No custom fields yet.</div>';
+  }
+  $('#colPop').innerHTML = `<div class="colcats">${cats}</div><div class="colitems">${items}</div>`;
+}
+$('#colBtn').addEventListener('click', e => { const pop = $('#colPop'); pop.hidden = !pop.hidden; e.currentTarget.setAttribute('aria-expanded', String(!pop.hidden)); if (!pop.hidden) renderColPop(); });
+document.addEventListener('click', e => { if (!e.target.closest('.popwrap') && !$('#colPop').hidden) { $('#colPop').hidden = true; $('#colBtn').setAttribute('aria-expanded', 'false'); } });
+$('#colPop').addEventListener('change', e => {
+  const k = e.target.dataset.coltoggle; if (!k) return;
+  const cols = effCols();
+  setOwnCols(e.target.checked ? [...cols, k] : cols.filter(x => x !== k));
+});
+$('#colPop').addEventListener('click', e => {
+  const c = e.target.closest('[data-cat]'); if (c) { state.colCat = c.dataset.cat; renderColPop(); return; }
+  const b = e.target.closest('[data-move]'); if (b && !b.disabled) { moveCol(b.dataset.move, b.dataset.to); return; }
+  if (e.target.id === 'colReset') { setOwnCols(null); toast('Back to the team default.'); return; }
+  if (e.target.id === 'colTeam') saveTeamCols();
+});
+async function saveTeamCols() {
+  const arr = effCols(), gen = loadGen;
+  try {
+    const r = await api.setTeamColumns({ cols: arr });
+    if (gen !== loadGen) return;
+    if (!r || !r.length) throw new Error('You do not have access to change the team default.');
+    state.colTeam = arr; toast('Saved as the team default. People who have not changed their own columns see it now.');
+  } catch (e) { if (gen === loadGen) toast(e.message || 'The team default was not saved.'); }
+  renderColPop();
+}
+let colDrag = null;
+$('#colPop').addEventListener('dragstart', e => { const r = e.target.closest('.colrow[data-i]'); if (!r) return; colDrag = +r.dataset.i; r.classList.add('dragging'); try { e.dataTransfer.setData('text/plain', r.dataset.i); } catch (_) {} });
+$('#colPop').addEventListener('dragover', e => { const r = e.target.closest('.colrow[data-i]'); if (!r) return; e.preventDefault(); $('#colPop').querySelectorAll('.colrow.dropline').forEach(x => x.classList.remove('dropline')); r.classList.add('dropline'); });
+$('#colPop').addEventListener('drop', e => { const r = e.target.closest('.colrow[data-i]'); if (!r || colDrag == null) return; e.preventDefault(); const f = colDrag; colDrag = null; moveCol(f, +r.dataset.i); });
+$('#colPop').addEventListener('dragend', () => { colDrag = null; $('#colPop').querySelectorAll('.colrow').forEach(x => x.classList.remove('dragging', 'dropline')); });
+
+// ───── Toolbar selects ─────
 function renderFilters() {
   const mgr = state.me.role === 'manager';
   const fa = $('#fAgent'); fa.hidden = !mgr;
   if (mgr) fa.innerHTML = `<option value="">Everyone</option>` + state.team.map(m => `<option value="${esc(m.id)}">${esc(m.full_name)}${m.active ? '' : ' (inactive)'}</option>`).join('');
-  fa.value = state.agent;
   $('#fStage').innerHTML = `<option value="">Any stage</option>` + state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-  $('#fStage').value = state.stage;
-  $('#fUnc').setAttribute('aria-pressed', String(state.unc));
-  applyZ(); state.zSig = ''; syncZFilter();
+  applyZ(); state.zSig = ''; syncZFilter(); syncQuick();
 }
 // The account menu lists every account seen in the loaded people (sorted), so a new account appears by itself.
 function syncZFilter() {
@@ -1293,28 +1705,36 @@ function syncZFilter() {
   if (sig === state.zSig) return;
   state.zSig = sig;
   $('#fZ').innerHTML = `<option value="">Any account</option>` + list.map(a => `<option value="${esc(a)}" title="${esc(a)}">${esc(zLocal(a))}</option>`).join('') + `<option value="__none">No account</option>`;
-  $('#fZ').value = state.zacct;
+  syncQuick();
 }
+let fnCache = { sig: '', fn: null };
 function filtered() {
   const q = state.q.trim().toLowerCase();
   const qd = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';   // phone search only when the box holds just digits and punctuation
-  const ucut = state.unc ? notContactedSince() : 0;
   const D = state.dup ? dupInfo() : null;
+  const sig = JSON.stringify(canonAll(state.filters)) + '|' + localKey(Date.now()) + '|' + state.fields.length + state.zOn;
+  if (fnCache.sig !== sig) fnCache = { sig, fn: compileFilters(state.filters) };
+  const test = fnCache.fn;
   const out = all.filter(p => {
     if (p.merged_into) return false;
     if (D && !D.of.has(p.id)) return false;
     if (state.onlyIds && !state.onlyIds.has(p.id)) return false;
-    if (state.agent && p.owner_id !== state.agent) return false;
-    if (state.stage && p.stage_id !== +state.stage) return false;
-    if (state.unc && (p.contacted_at || closes(p) || p._c < ucut)) return false;
-    if (state.zOn && state.zacct && (state.zacct === '__none' ? p.zillow_account : p.zillow_account !== state.zacct)) return false;
-    if (q && !(p._ls.includes(q) || (qd && p._dg.includes(qd)))) return false;
+    if (!test(p)) return false;
+    // The search also looks at the listing address of the lead's newest inquiry, but only for leads already opened (no extra query).
+    if (q && !(p._ls.includes(q) || (qd && p._dg.includes(qd)) || (inqCache.has(p.id) && String(inqCache.get(p.id)).toLowerCase().includes(q)))) return false;
     return true;
   });
-  const k = state.sort.key === 'activity' ? '_a' : '_c', dir = state.sort.dir === 'asc' ? 1 : -1;
-  out.sort((a, b) => (a[k] - b[k]) * dir || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (D) out.sort((a, b) => D.of.get(a.id) - D.of.get(b.id));   // the duplicates filter lists each group together (the sort above holds inside a group)
-  return out;
+  const d = colDef(state.sort.key) || colDef('created'), dir = state.sort.dir === 'asc' ? 1 : -1;
+  const keyed = out.map(p => [p, d.sort(p)]);
+  keyed.sort((x, y) => {
+    const a = x[1], b = y[1];
+    if (a == null || b == null) { if (a != null) return -1; if (b != null) return 1; }   // blanks last, whichever way the sort runs
+    else if (a !== b) return (a < b ? -1 : 1) * dir;
+    return x[0].id < y[0].id ? -1 : x[0].id > y[0].id ? 1 : 0;
+  });
+  const res = keyed.map(x => x[0]);
+  if (D) res.sort((a, b) => D.of.get(a.id) - D.of.get(b.id));   // the duplicates list keeps each group together (the sort above holds inside a group)
+  return res;
 }
 const isContacted = (p) => pend.has(p.id) && 'contacted' in pend.get(p.id) ? pend.get(p.id).contacted : !!p.contacted_at;
 const stageIdShown = (p) => pend.has(p.id) && 'stage' in pend.get(p.id) ? pend.get(p.id).stage : p.stage_id;
@@ -1349,6 +1769,22 @@ function contactedBox(p, short) {
 function ownerChip(p) {
   return p.owner_id ? `<span class="who">${avatar(p.owner_id, 'sm')}${esc(memberName(p.owner_id) || 'Team member')}</span>` : '<span class="sub">Unassigned</span>';
 }
+// A phone number. On a phone or touch screen a tap opens Call / Text / Copy. On a computer it stays plain, selectable text (notes v49).
+const numLink = (phone, extra = '') => `<span class="numlink ${extra}" data-num="${esc(phone)}" role="button" tabindex="0">${esc(fmtPhone(phone))}</span>`;
+const isTouch = () => window.matchMedia('(max-width: 860px), (pointer: coarse)').matches;
+function openNumSheet(raw) {
+  const tel = String(raw || '').replace(/\D/g, '');
+  showModal(`<h3 class="num" style="text-align:center" id="numTitle">${esc(fmtPhone(raw))}</h3><div class="numsheet">
+    <a class="btn big" href="${esc(telHref(raw))}" data-numgo id="numCall">${phoneSvg} Call</a><a class="btn big" href="sms:+${esc(tel)}" data-numgo id="numText">Text</a>
+    <button class="btn big" id="numCopy">Copy number</button><button class="btn big" data-close>Cancel</button></div>`);
+  $('#numCopy').onclick = () => { try { navigator.clipboard.writeText(fmtPhone(raw)).then(() => toast('Number copied.'), () => toast(fmtPhone(raw))); } catch (_) { toast(fmtPhone(raw)); } closeModal(); };
+  $('#modal').querySelectorAll('[data-numgo]').forEach(a => a.addEventListener('click', () => setTimeout(closeModal, 300)));
+}
+document.addEventListener('click', (e) => {
+  const nl = e.target.closest('.numlink'); if (!nl || !isTouch()) return;
+  e.preventDefault(); e.stopPropagation(); openNumSheet(nl.dataset.num);
+}, true);
+document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('numlink') && isTouch()) { e.preventDefault(); openNumSheet(e.target.dataset.num); } });
 function personCard(p) {
   const ph = (p.person_phones || [])[0], em = bestEmail(p);
   const owner = p.owner_id ? `<span class="who">${avatar(p.owner_id, 'sm')}${esc(firstName(p.owner_id) || 'Team member')}</span>` : '';
@@ -1360,43 +1796,39 @@ function personCard(p) {
       <div class="pc-top">${isContacted(p) ? '' : '<span class="dot" aria-label="Not contacted yet"></span>'}<span class="name">${esc(p._name || '(no name)')}</span>${dupMark(p)}</div>
       <div class="sub">${esc(p.source)} · ${esc(rel(p.last_activity_at))}</div>
       ${state.zOn && p.zillow_account ? `<div class="sub" title="${esc(p.zillow_account)}">Zillow: ${esc(zLocal(p.zillow_account))}</div>` : ''}
-      ${ph || em ? `<div class="pc-meta">${ph ? `<a class="maillink" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a>` : ''}${em ? `<a class="maillink pc-email" href="mailto:${esc(em.email)}">${esc(em.email)}</a>` : ''}</div>` : ''}
+      ${ph || em ? `<div class="pc-meta">${ph ? numLink(ph.phone) : ''}${em ? `<a class="maillink pc-email" href="mailto:${esc(em.email)}">${esc(em.email)}</a>` : ''}</div>` : ''}
       <div class="pc-foot">${contactedBox(p, false)}${owner}<span class="stagepill">${esc(stg ? stg.name : '')}</span></div>
     </div></div>`;
 }
-function rowHtml(p) {
-  const ph = (p.person_phones || [])[0], em = bestEmail(p);
+function rowHtml(p, defs) {
   const sel = state.sel.has(p.id);
   return `<tr data-open="${esc(p.id)}" class="${isContacted(p) ? '' : 'unread'} ${sel ? 'sel' : ''}${state.dup ? ' grp' + (dupGroupOf(p.id) % 2) : ''}">
     <td class="c-check"><input type="checkbox" data-sel="${esc(p.id)}" ${sel ? 'checked' : ''} aria-label="Select ${esc(p._name || 'this person')}"></td>
-    <td class="c-name"><div class="who"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span><div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div><div style="min-width:0"><div class="name">${esc(p._name || '(no name)')}</div>${dupMark(p)}</div></div></td>
-    <td>${contactedBox(p, true)}</td>
-    <td>${ownerChip(p)}</td>
-    <td>${ph ? `<a class="maillink num" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a>` : '<span class="sub">none yet</span>'}</td>
-    <td>${em ? `<a class="email maillink" href="mailto:${esc(em.email)}" title="${esc(em.email)}">${esc(em.email)}</a>${em.is_relay ? ' <span class="pill info">Zillow relay</span>' : ''}` : '<span class="sub">none</span>'}</td>
-    <td>${stageSelect(p, 'Stage for ' + (p._name || 'this person'))}</td>
-    <td>${esc(p.source)}</td>
-    ${state.zOn ? `<td>${p.zillow_account ? `<span title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span>` : '<span class="sub">—</span>'}</td>` : ''}
-    <td><span class="num">${esc(fmtShort(p.created_at))}</span></td>
-    <td><span class="num" title="${esc(fmtShort(p.last_activity_at))}">${esc(rel(p.last_activity_at))}</span></td>
+    <td class="c-name"><div class="who"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span><div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div><div style="min-width:0"><div class="name">${esc(p._name || '(no name)')}</div><div class="sub">${esc(p.source)}</div>${dupMark(p)}</div></div></td>
+    ${defs.map(d => `<td>${d.cell(p)}</td>`).join('')}
     <td class="c-card">${personCard(p)}</td></tr>`;
+}
+function headHtml(cols) {
+  const th = (d, cls, extra) => {
+    const on = state.sort.key === d.key, ar = on ? (state.sort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+    return `<th class="${cls}" ${d.th ? `id="${d.th}"` : ''} aria-sort="${on ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}"><button class="sortbtn" data-sort="${esc(d.key)}">${esc(d.label)}${ar}</button></th>`;
+  };
+  return `<tr><th class="c-check"><input type="checkbox" id="checkAll" aria-label="Select the people shown"></th>` + cols.map(k => { const d = colDef(k); return th(d, k === 'name' ? 'c-name' : d.numc ? 'num-col' : ''); }).join('') + '</tr>';
 }
 function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
   if (state.view === 'calendar') { renderCal(); return; }
   if (state.view === 'renewals' || state.view === 'settings') return;
-  syncZFilter(); renderDupChrome();
-  const list = filtered(), n = list.length;
+  syncZFilter(); renderDupChrome(); syncQuick();
+  const cols = effCols(), list = filtered(), n = list.length, l = curList();
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
-  for (const [id, key] of [['#thCreated', 'created'], ['#thActivity', 'activity']]) {
-    const th = $(id), on = state.sort.key === key;
-    th.setAttribute('aria-sort', on ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none');
-    th.querySelector('button').textContent = (key === 'created' ? 'Created' : 'Last activity') + (on ? (state.sort.dir === 'asc' ? ' ↑' : ' ↓') : '');
-  }
-  const rowsShown = list.slice(0, state.limit);
+  $('#listTitle').textContent = l.name; $('#listDesc').textContent = listDesc(l);
+  $('#listEdited').hidden = !listEdited();
+  $('#thead').innerHTML = headHtml(cols);
+  const rowsShown = list.slice(0, state.limit), defs = cols.slice(1).map(colDef);
   state.list = list; state.shownIds = rowsShown.map(p => p.id);
-  $('#rows').innerHTML = rowsShown.map(rowHtml).join('');
+  $('#rows').innerHTML = rowsShown.map(p => rowHtml(p, defs)).join('');
   $('#onlyChip').hidden = !state.onlyIds; if (state.onlyIds) $('#onlyText').textContent = `Showing the ${plural(state.onlyIds.size, 'person', 'people')} that were skipped.`;
   $('#empty').hidden = n > 0 || state.loading;
   $('#more').hidden = n <= state.limit;
@@ -1405,30 +1837,196 @@ function renderList() {
   renderBulk();
 }
 function resetPaging() { filterChanged(); }
+// A filter changed on screen: the table follows, and so does the panel when its rows changed shape.
+function applyFilters(panel = true) { filterChanged(); if (panel && state.showF) renderFPanel(); }
 
 $('#search').addEventListener('input', e => { state.q = e.target.value; if (state.view === 'dash') { state.sel.clear(); state.onlyIds = null; state.limit = SHOW; go('people'); } else filterChanged(); });
-$('#fAgent').addEventListener('change', e => { state.agent = e.target.value; resetPaging(); });
-$('#fZ').addEventListener('change', e => { state.zacct = e.target.value; resetPaging(); });
-$('#fStage').addEventListener('change', e => { state.stage = e.target.value; resetPaging(); });
-$('#fUnc').addEventListener('click', () => { state.unc = !state.unc; $('#fUnc').setAttribute('aria-pressed', String(state.unc)); resetPaging(); });
-$('#fDup').addEventListener('click', () => { state.dup = !state.dup; renderDupChrome(); resetPaging(); });
+$('#fAgent').addEventListener('change', e => { qSet('agent', e.target.value); applyFilters(); });
+$('#fZ').addEventListener('change', e => { qSet('zacct', e.target.value); applyFilters(); });
+$('#fStage').addEventListener('change', e => { qSet('stage', e.target.value); applyFilters(); });
+$('#fUnc').addEventListener('click', () => {
+  if (qFind('contacted', 'no')) { state.filters = state.filters.filter(f => f.key !== 'contacted'); const c = closedFilter(); if (c) state.filters = state.filters.filter(f => f !== c); }
+  else { state.filters = state.filters.filter(f => f.key !== 'contacted'); state.filters.push({ id: ++fseq, open: false, key: 'contacted', op: 'no', vals: [] }); if (!closedFilter()) state.filters.push({ id: ++fseq, open: false, key: 'stage', op: 'none', vals: closingIds() }); }
+  applyFilters();
+});
 $('#moreBtn').addEventListener('click', () => { state.limit += SHOW; renderList(); });
-document.querySelector('thead').addEventListener('click', e => {
+$('#thead').addEventListener('click', e => {
   const b = e.target.closest('[data-sort]'); if (!b) return;
-  const k = b.dataset.sort;
-  state.sort = { key: k, dir: state.sort.key === k && state.sort.dir === 'desc' ? 'asc' : 'desc' };
+  const k = b.dataset.sort, d = colDef(k); if (!d) return;
+  state.sort = { key: k, dir: state.sort.key === k ? (state.sort.dir === 'desc' ? 'asc' : 'desc') : d.first };
   state.limit = SHOW; renderList();
 });
+$('#thead').addEventListener('change', e => {
+  if (e.target.id !== 'checkAll') return;
+  const ids = state.shownIds || [], every = ids.length > 0 && ids.every(id => state.sel.has(id));
+  ids.forEach(id => every ? state.sel.delete(id) : state.sel.add(id));
+  syncSel();
+});
+$('#rail').addEventListener('click', e => { const b = e.target.closest('[data-sl]'); if (b) pickList(b.dataset.sl === 'dups' && state.sl === 'dups' ? 'all' : b.dataset.sl); });
+$('#railSelect').addEventListener('change', e => pickList(e.target.value));
+$('#listReset').addEventListener('click', () => { pickList(state.sl); toast("Back to the list's own filters."); });
 $('#rows').addEventListener('click', e => {
   if (e.target.closest('input, select, button, a, label')) return;
-  const r = e.target.closest('[data-open]'); if (r) openPanel(r.dataset.open);
+  const r = e.target.closest('[data-open]'); if (r) { state.full = false; state.navIds = (state.list || []).map(p => p.id); openPanel(r.dataset.open); }
+});
+$('#rows').addEventListener('dblclick', e => {
+  if (e.target.closest('input, select, button, a, label')) return;
+  const r = e.target.closest('[data-open]'); if (!r) return;
+  state.full = true; state.navIds = (state.list || []).map(p => p.id);
+  if (state.open === r.dataset.open) renderPanel(); else openPanel(r.dataset.open);
 });
 $('#rows').addEventListener('change', onChange);
+// The People page is a fixed window on wide screens (notes v28); the frozen Name column casts a shadow while the table is scrolled sideways.
+function syncFixed() { document.body.classList.toggle('fixed-page', !!state.me && state.view === 'people' && window.innerWidth > 1180); }
+window.addEventListener('resize', syncFixed);
+$('#tablewrap').addEventListener('scroll', () => $('#tablewrap').classList.toggle('scrolled', $('#tablewrap').scrollLeft > 2), { passive: true });
+
+// ───── Filter panel ─────
+$('#filterBtn').addEventListener('click', () => { state.showF = !state.showF; applyFilterPanel(); });
+function applyFilterPanel() {
+  $('#fpanel').hidden = !state.showF; $('#peopleLayout').classList.toggle('with-filters', state.showF);
+  $('#filterBtn').setAttribute('aria-expanded', String(state.showF));
+  if (state.showF) renderFPanel();
+}
+const fById = (id) => state.filters.find(x => x.id === +id);
+const PRESETS = { past: [['Today', 0, 0], ['Last 7 days', -6, 0], ['Last 30 days', -29, 0], ['Last 90 days', -89, 0]], future: [['Next 7 days', 0, 7], ['Next 30 days', 0, 30], ['Next 45 days', 0, 45], ['Next 90 days', 0, 90]] };
+function filterBody(f) {
+  const d = fdef(f.key); if (!d) return '<div class="sub">This filter is not available now (the field may be hidden or removed). Remove it to continue.</div>';
+  const ops = FOPS[d.type].filter(o => !(d.noEmpty && (o[0] === 'empty' || o[0] === 'notempty')));
+  const radios = ops.map(([v, t]) => `<label><input type="radio" name="fop-${f.id}" data-fop="${f.id}" value="${v}" ${f.op === v ? 'checked' : ''}>${t}</label>`).join('');
+  let val = '';
+  if (d.type === 'choice' && (f.op === 'any' || f.op === 'none')) {
+    const opts = foptions(f.key), vals = f.vals || [];
+    const left = opts.filter(o => !vals.map(String).includes(String(o[0])));
+    val = `<div class="vchips">${vals.map(v => `<span class="vchip">${esc(fvalLabel(f.key, v))}<button data-fchipx="${f.id}" data-val="${esc(v)}" aria-label="Remove ${esc(fvalLabel(f.key, v))}">×</button></span>`).join('')}
+      ${left.length ? `<span class="vadd" title="Add a value"><span>+</span><select data-faddval="${f.id}" aria-label="Add a value to ${esc(d.label)}"><option value=""></option>${left.map(o => `<option value="${esc(o[0])}">${esc(o[1])}</option>`).join('')}</select></span>` : ''}</div>`;
+  }
+  if (f.op === 'between' && (d.type === 'date' || d.type === 'daterange')) {
+    const rel = Array.isArray(f.rel), pre = (d.past ? PRESETS.past : PRESETS.future);
+    val = `<div class="presets">${pre.map(([t, a, b]) => `<button class="chip" data-fpreset="${f.id}|${a}|${b}" aria-pressed="${rel && f.rel[0] === a && f.rel[1] === b}">${t}</button>`).join('')}</div>
+      <div class="range"><input type="date" data-ffrom="${f.id}" value="${esc(rel ? '' : f.from || '')}" aria-label="From"><span class="sub">to</span><input type="date" data-fto="${f.id}" value="${esc(rel ? '' : f.to || '')}" aria-label="To"></div>`;
+  }
+  if (f.op === 'between' && d.type === 'number') val = `<div class="range"><input type="number" data-ffrom="${f.id}" value="${esc(f.from == null ? '' : f.from)}" placeholder="Min" aria-label="Min"><span class="sub">to</span><input type="number" data-fto="${f.id}" value="${esc(f.to == null ? '' : f.to)}" placeholder="Max" aria-label="Max"></div>`;
+  if (f.op === 'contains') val = `<input type="text" data-ftext="${f.id}" value="${esc(f.text || '')}" placeholder="Type text" aria-label="Text to find">`;
+  return `<div class="radios">${radios}</div>${val}`;
+}
+const chev = '<svg class="chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const sliders = '<svg width="44" height="36" viewBox="0 0 44 36" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h36M4 18h36M4 29h36"/></g><g fill="var(--surface)" stroke="currentColor" stroke-width="2.4"><rect x="12" y="3" width="7" height="8" rx="1.5"/><rect x="26" y="14" width="7" height="8" rx="1.5"/><rect x="15" y="25" width="7" height="8" rx="1.5"/></g></svg>';
+function canSaveChanges() {
+  const l = state.lists.find(x => x.id === state.sl);
+  return !!l && !!state.me && (l.owner_id ? l.owner_id === state.me.id : isMgr());   // a team list: managers only. My lists: the owner.
+}
+// Buttons under the filter rows: they depend on whether the list was changed and on who may change it.
+function barHtml() {
+  const edited = listEdited(), any = state.filters.length > 0, save = canSaveChanges(), l = listOf(state.sl);
+  const parts = [];
+  if (save && edited) parts.push(`<button class="btn primary small" id="fupdate">Save changes to "${esc(curList().name)}"</button>`);
+  if (any && (state.sl === 'all' || edited)) parts.push(`<button class="btn ${save && edited ? '' : 'primary '}small" id="fsave">Save as new list</button>`);
+  let html = parts.length ? `<div class="savebar" id="fsaveWrap">${parts.join('')}</div>` : '';
+  if (edited && !save && l && state.lists.includes(l)) html += '<div class="fnote" id="fnoteTeam">Only a manager can change a team list. Save your version as a list of your own.</div>';
+  if (state.sl === 'all' && any) html += '<div class="fclear"><button id="fclear">Clear filters</button></div>';
+  else if (state.sl !== 'all' && edited) html += '<div class="fclear" id="fresetWrap"><button id="freset">Reset to list</button></div>';
+  return html;
+}
+function renderFPanel() {
+  const keys = fkeys();
+  const rows = state.filters.map(f => `<div class="frow" data-frow="${f.id}">
+    <button class="fhead" data-ftoggle="${f.id}" aria-expanded="${!!f.open}"><span class="txt" title="${esc(describeFilter(f))}">${esc(describeFilter(f))}</span>${chev}</button>
+    ${f.open ? `<div class="fbody">${filterBody(f)}<div><button class="btn small" data-fremove="${f.id}">Remove filter</button></div></div>` : ''}</div>`).join('');
+  $('#fpanel').innerHTML = `<div class="fsheet-head"><b>Filters</b><button class="btn small primary" id="fdone">Done</button></div>
+    <div class="addwrap"><select class="add" id="fadd" aria-label="Add a filter"><option value="">Add a filter</option>${keys.map(k => `<option value="${esc(k)}">${esc(fdef(k).label)}</option>`).join('')}</select></div>
+    ${state.filters.length ? `<div class="rows">${rows}</div>` : `<div class="fempty">${sliders}No filters added yet</div>`}<div id="fbar">${barHtml()}</div>`;
+}
+function fTouched(el) {
+  // Typing in a box: the table follows at once. The rows are not redrawn (that would drop the cursor), but the title and the buttons are.
+  filterChanged();
+  const row = el.closest('.frow'), f = row && fById(row.dataset.frow);
+  if (f) row.querySelector('.fhead .txt').textContent = describeFilter(f);
+  const bar = $('#fbar'); if (bar) bar.innerHTML = barHtml();
+}
+$('#fpanel').addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'fadd' && t.value) {
+    const d = fdef(t.value), f = { id: ++fseq, open: true, key: t.value, op: FOPS[d.type][0][0], vals: [] };
+    state.filters.push(f); applyFilters(); return;
+  }
+  if (t.dataset.fop) {
+    const f = fById(t.dataset.fop); f.op = t.value;
+    if (f.op !== 'between') { delete f.from; delete f.to; delete f.rel; }
+    applyFilters(); return;
+  }
+  if (t.dataset.faddval && t.value) { const f = fById(t.dataset.faddval); f.vals = [...(f.vals || []), f.key === 'stage' ? +t.value : t.value]; applyFilters(); return; }
+  const fid = t.dataset.ffrom || t.dataset.fto;   // a date or number picked: redraw so the preset chips follow
+  if (fid) { const f = fById(fid); delete f.rel; f[t.dataset.ffrom ? 'from' : 'to'] = t.value; applyFilters(); }
+});
+$('#fpanel').addEventListener('input', e => {
+  const t = e.target, fid = t.dataset.ffrom || t.dataset.fto || t.dataset.ftext; if (!fid) return;
+  const f = fById(fid);
+  if (t.dataset.ftext) f.text = t.value; else { delete f.rel; f[t.dataset.ffrom ? 'from' : 'to'] = t.value; }
+  fTouched(t);
+});
+$('#fpanel').addEventListener('click', e => {
+  const t = e.target.closest('[data-ftoggle]'); if (t) { const f = fById(t.dataset.ftoggle); f.open = !f.open; renderFPanel(); return; }
+  const x = e.target.closest('[data-fchipx]'); if (x) { const f = fById(x.dataset.fchipx); f.vals = f.vals.filter(v => String(v) !== x.dataset.val); applyFilters(); return; }
+  const r = e.target.closest('[data-fremove]'); if (r) { state.filters = state.filters.filter(f => f.id !== +r.dataset.fremove); applyFilters(); return; }
+  const pr = e.target.closest('[data-fpreset]'); if (pr) { const [id, a, b] = pr.dataset.fpreset.split('|'); const f = fById(id); f.rel = [+a, +b]; delete f.from; delete f.to; applyFilters(); return; }
+  if (e.target.id === 'fclear') { state.filters = []; applyFilters(); }
+  if (e.target.id === 'fdone') { state.showF = false; applyFilterPanel(); }
+  if (e.target.id === 'freset') { pickList(state.sl); toast("Back to the list's own filters."); }
+  if (e.target.id === 'fsave') openSaveList();
+  if (e.target.id === 'fupdate') saveChanges();
+});
+const agentCount = () => state.team.filter(m => m.role === 'agent' && m.active).length;
+async function saveChanges() {
+  const l = state.lists.find(x => x.id === state.sl); if (!l || !canSaveChanges()) return;
+  const filters = canonAll(state.filters);
+  const go = async () => {
+    try {
+      const r = await api.updateSmartList(l.id, { filters });
+      if (!r || !r.length) throw new Error('Not saved: you do not have access to change this list.');
+      Object.assign(l, r[0]); state.listsVer++;
+      pickList(l.id); toast(l.owner_id ? `Saved changes to "${l.name}".` : `"${l.name}" updated for everyone.`);
+    } catch (e) { toast(e.message || 'The list was not saved.'); }
+  };
+  if (l.owner_id) { await go(); return; }
+  showModal(`<h3 id="teamChangeTitle">Change "${esc(l.name)}" for everyone?</h3>
+    <p style="margin:0;color:var(--ink-2)" id="teamChangeText">This changes the list for all ${plural(agentCount(), 'agent', 'agents')}. Their counts and lists update right away.</p>
+    <div class="vchips">${filters.map(f => `<span class="rule">${esc(describeFilter(f))}</span>`).join('') || '<span class="sub">No filters: every lead.</span>'}</div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="confirmUpdate">Change for everyone</button></div>`);
+  $('#confirmUpdate').onclick = () => { closeModal(); go(); };
+}
+function openSaveList() {
+  const n = state.filters.length;
+  showModal(`<h3>Save as new list</h3>
+    <div class="field"><label for="slName">Name</label><input id="slName" maxlength="80" placeholder="e.g. Back Bay 2-beds moving in December"></div>
+    <div class="field"><label for="slDesc">Description (optional)</label><textarea id="slDesc" maxlength="300" placeholder="Who is on this list, and why"></textarea></div>
+    ${isMgr() ? '<div class="reasons"><label><input type="radio" name="slWho" value="team" checked> Team list: every agent sees it</label><label><input type="radio" name="slWho" value="me"> Only me</label></div>' : ''}
+    <div class="sub">It saves the ${plural(n, 'filter', 'filters')} in the panel now. ${isMgr() ? 'In a team list, agents still see only their own leads.' : 'Only you see this list.'}</div>
+    <div class="err" id="slErr"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="slSave">Save list</button></div>`);
+  $('#slName').focus();
+  $('#slSave').onclick = async () => {
+    const name = $('#slName').value.trim(), err = (m) => { $('#slErr').textContent = m; };
+    if (!name) { err('Type a name.'); return; }
+    const team = isMgr() && ($('#modal').querySelector('[name="slWho"]:checked') || {}).value === 'team';
+    const pool = team ? teamLists() : myLists();
+    if (pool.some(l => ciEq(l.name, name)) || (team && ciEq(name, BUILTIN.all.name)) || ciEq(name, BUILTIN.unc.name)) { err('A list with that name already exists.'); return; }
+    $('#slSave').disabled = true;
+    try {
+      const max = Math.max(0, ...pool.map(l => l.sort_order));
+      const row = await api.addSmartList({ name, description: $('#slDesc').value.trim(), filters: canonAll(state.filters), owner_id: team ? null : state.me.id, hidden_from_agents: false, sort_order: max + 10, created_by: state.me.id });
+      state.lists.push(row); state.listsVer++;
+      closeModal(); pickList(row.id); toast(team ? `Saved "${name}" for the whole team.` : `Saved "${name}" to My lists.`);
+    } catch (e) { err(e.message || 'The list was not saved.'); $('#slSave').disabled = false; }
+  };
+}
+// The duplicates list (v2.3) appears in the rail only when the feature is on and a group exists.
+
 
 // ───────── Selection and bulk edit (People) ─────────
 // Only leads where canEdit(p) is true change (pilot rule). One chunk of 100 ids at a time.
 const CHUNK = 100;
-const NOT_CONTACTED_DAYS = 30;   // "not contacted" counts only leads created in the last 30 local days
+const NOT_CONTACTED_DAYS = 30;   // the Dashboard counts "not contacted" over the last 30 local days only. The People list has no cut (v2.4).
 const notContactedSince = () => +dayStart(-(NOT_CONTACTED_DAYS - 1));
 const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 const selPeople = () => [...state.sel].map(id => byId.get(id)).filter(Boolean);
@@ -1444,12 +2042,6 @@ function syncSel() {
   renderBulk();
 }
 function selectAllMatching() { (state.list || []).forEach(p => state.sel.add(p.id)); syncSel(); }
-$('#checkAll').addEventListener('change', e => {
-  const ids = state.shownIds || [];
-  const all = ids.length > 0 && ids.every(id => state.sel.has(id));
-  ids.forEach(id => all ? state.sel.delete(id) : state.sel.add(id));
-  syncSel();
-});
 
 function renderBulk() {
   const bar = $('#bulkbar'), b = state.bulk, n = state.sel.size;
@@ -1555,7 +2147,7 @@ async function continueBulk() {
   state.sel.clear(); toast(parts[0]); renderList(); renderBulk();
 }
 function showThese(ids) {
-  state.q = ''; $('#search').value = ''; state.agent = ''; state.stage = ''; state.unc = false; state.zacct = '';
+  state.q = ''; $('#search').value = ''; state.sl = 'all'; state.dup = false; state.filters = [];
   state.sel.clear(); state.onlyIds = new Set(ids); state.limit = SHOW;
   state.bulk = Object.assign({}, state.bulk, { res: '', incNames: [] });
   renderFilters(); renderList();
@@ -1731,7 +2323,7 @@ function applyView() {
   const v = state.view;
   $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings'; $('#view-calendar').hidden = v !== 'calendar';
   document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
-  renewChrome();
+  renewChrome(); syncFixed();
   if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); }
   else if (v === 'calendar') loadCal();
   else if (v === 'settings') openSettings();
@@ -1750,15 +2342,22 @@ function closePanel() {
   try { history.replaceState(null, '', location.href.split('#')[0] + '#' + state.view); } catch (_) {}
   hidePanel();
 }
-function closePanelQuiet() { state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
+function closePanelQuiet() { state.full = false; state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
 function hidePanel() { closePanelQuiet(); }
 $('#scrim').addEventListener('click', closePanel);
+$('#panel').addEventListener('click', e => {
+  const st = e.target.closest('[data-step]'); if (st && !st.disabled) { stepPerson(+st.dataset.step); return; }
+  if (e.target.closest('#pFull')) { state.full = !state.full; renderPanel(); }
+});
 $('#nav').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; go(b.dataset.view); window.scrollTo(0, 0); });
 
 async function showPanel(id) {
   if (state.open === id) return;
   state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false; state.edit = null; state.lastEdit = null;
   $('#panel').hidden = false; $('#scrim').hidden = false; document.documentElement.classList.add('noscroll');
+  // For a moment the panel and scrim let clicks through, so the second click of a double-click lands on the row (it opens the full page).
+  state.openedAt = Date.now(); $('#panel').classList.add('settle'); $('#scrim').classList.add('settle');
+  setTimeout(() => { $('#panel').classList.remove('settle'); $('#scrim').classList.remove('settle'); }, 450);
   renderPanel();
   if (!byId.has(id) && !state.loading) ensureOpenRow(id);
   loadLeadAppts(id);
@@ -1795,6 +2394,17 @@ function fieldValue(f, v) {
     default: return esc(String(v));
   }
 }
+// "Person X of N" with ‹ › through the list as it was when this person was opened from People, plus the full-page switch.
+function stepperHtml() {
+  const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
+  return `<div class="stepper" id="stepper">${i >= 0 ? `<span id="stepText">Person ${(i + 1).toLocaleString('en-US')} of ${ids.length.toLocaleString('en-US')}</span><button class="btn small" data-step="-1" aria-label="Previous person" ${i === 0 ? 'disabled' : ''}>‹</button><button class="btn small" data-step="1" aria-label="Next person" ${i === ids.length - 1 ? 'disabled' : ''}>›</button>` : ''}<span class="spacer"></span><button class="btn small" id="pFull">${state.full ? 'Open as side panel' : 'Open full page'}</button></div>`;
+}
+function stepPerson(d) {
+  const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1, j = i + d;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  location.replace(location.href.split('#')[0] + '#p/' + ids[j]);   // replaces the entry, so Back still returns to the list
+  const el = $('#panel'); if (el) el.scrollTop = 0;
+}
 function renderPanel() {
   const el = $('#panel');
   if (!state.open) return;
@@ -1806,7 +2416,8 @@ function renderPanel() {
   const keep = $('#newNote') ? $('#newNote').value : state.draft;
   const hadFocus = document.activeElement && document.activeElement.id === 'newNote';
   const p = byId.get(state.open);
-  const head = (title, raw) => `<div class="panel-head"><div class="row top">${raw || `<h2>${title}</h2>`}<button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>`;
+  el.classList.toggle('full', state.full);
+  const head = (title, raw) => `<div class="panel-head"><div class="row top">${raw || `<h2>${title}</h2>`}<button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>${stepperHtml()}`;
   if (!p) {
     el.innerHTML = head(state.missing ? 'Not found' : 'Loading…') + `</div><div class="panel-body"><div class="${state.missing ? 'err-s' : 'loading-s'}">${state.missing ? 'This person could not be found, or you do not have access.' : 'Loading…'}</div></div>`;
     $('#closePanel').onclick = closePanel; return;
@@ -1820,7 +2431,7 @@ function renderPanel() {
   const phoneEd = (x) => editbox(`<div class="edrow"><input id="ePhone" value="${esc(x ? fmtPhone(x.phone) : '')}" placeholder="10-digit US number" aria-label="Phone number" inputmode="tel"><select id="eLabel" aria-label="Label">${PHONE_LABELS.map(l => `<option ${((x && x.label) || 'Mobile') === l ? 'selected' : ''}>${l}</option>`).join('')}</select><span></span></div>`, dis);
   const emailEd = (x) => editbox(`<div class="edrow nolabel"><input id="eEmail" value="${esc(x ? x.email : '')}" placeholder="name@example.com" aria-label="Email address" type="email"><span></span></div>`, dis);
   const contact = `<div class="section"><h4>Contact</h4>
-    ${ph.map(x => state.edit === 'phone:' + x.id ? phoneEd(x) : `<div class="vrow"><span class="vic">${phoneSvg}</span><a class="val maillink num" href="${esc(telHref(x.phone))}">${esc(fmtPhone(x.phone))}</a>${x.label ? `<span class="sub">${esc(x.label)}</span>` : ''}<span class="spacer"></span>${pen('phone:' + x.id, 'Edit phone number')}${del('phone', x.id, 'Remove phone number')}</div>`).join('') || '<div class="vrow"><span class="sub">No phone number yet.</span></div>'}
+    ${ph.map(x => state.edit === 'phone:' + x.id ? phoneEd(x) : `<div class="vrow"><span class="vic">${phoneSvg}</span>${numLink(x.phone, 'val num')}${x.label ? `<span class="sub">${esc(x.label)}</span>` : ''}<span class="spacer"></span>${pen('phone:' + x.id, 'Edit phone number')}${del('phone', x.id, 'Remove phone number')}</div>`).join('') || '<div class="vrow"><span class="sub">No phone number yet.</span></div>'}
     ${state.edit === 'phone:new' ? phoneEd(null) : addBtn('phone:new', '+ Add phone')}
     ${em.map(x => state.edit === 'email:' + x.id ? emailEd(x) : `<div class="vrow"><span class="vic">${mailSvg}</span><a class="val maillink" href="mailto:${esc(x.email)}">${esc(x.email)}</a>${x.is_relay ? '<span class="pill info">Zillow relay</span>' : ''}<span class="spacer"></span>${x.is_relay ? '' : pen('email:' + x.id, 'Edit email')}${del('email', x.id, 'Remove email')}</div>`).join('') || '<div class="vrow"><span class="sub">No email yet.</span></div>'}
     ${state.edit === 'email:new' ? emailEd(null) : addBtn('email:new', '+ Add email')}</div>`;
@@ -2057,12 +2668,10 @@ function dupInfo() {
 }
 const dupGroupOf = (id) => dupInfo().of.get(id) || 0;
 const dupMark = (p) => dupInfo().of.has(p.id) ? '<span class="pill warn dupmark" title="Possible duplicate. Open the lead to review.">Duplicate?</span>' : '';
+// v2.4: the duplicates list is an item in the People sidebar (renderRail). When the last group is handled, the list falls back to All People.
 function renderDupChrome() {
-  const b = $('#fDup'), n = dupInfo().groups.length;
-  if (state.dup && !n) state.dup = false;
-  b.hidden = !(state.dupOn && isMgr() && n > 0);
-  b.setAttribute('aria-pressed', String(state.dup));
-  b.textContent = `Possible duplicates (${plural(n, 'group', 'groups')})`;
+  if (state.sl === 'dups' && !(state.dupOn && isMgr() && dupInfo().groups.length > 0)) { state.sl = 'all'; state.dup = false; state.filters = []; }
+  renderRail();
 }
 async function loadDismissals(gen) {
   try {
@@ -2387,7 +2996,7 @@ function renderDash() {
       const ph = (p.person_phones || [])[0], dg = ph ? String(ph.phone).replace(/\D/g, '') : '', addr = inqCache.get(p.id);
       const ro = !canEdit(p);
       return `<div class="li" data-newlead="${esc(p.id)}"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">${esc(p.source)} · ${esc(rel(p.created_at))}${addr ? ' · ' + esc(String(addr).split(',')[0]) : ''} · ${who(p.owner_id)}</div></div>
-        <span class="row">${ph ? `<a class="maillink num" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a><a class="btn small" href="sms:+${esc(dg)}">Text</a>` : '<span class="sub">no number yet</span>'}<label class="contacted" title="${esc(ro ? readOnlyWhy(p) : 'Mark as contacted')}"><input type="checkbox" data-contact="${esc(p.id)}" ${isContacted(p) ? 'checked' : ''} ${busy.has(p.id) || ro ? 'disabled' : ''}>Contacted</label></span></div>`;
+        <span class="row">${ph ? `<a class="maillink num numlink" href="${esc(telHref(ph.phone))}" data-num="${esc(ph.phone)}">${esc(fmtPhone(ph.phone))}</a><a class="btn small" href="sms:+${esc(dg)}">Text</a>` : '<span class="sub">no number yet</span>'}<label class="contacted" title="${esc(ro ? readOnlyWhy(p) : 'Mark as contacted')}"><input type="checkbox" data-contact="${esc(p.id)}" ${isContacted(p) ? 'checked' : ''} ${busy.has(p.id) || ro ? 'disabled' : ''}>Contacted</label></span></div>`;
     }).join('') || '<div class="empty-s">Every new lead has been contacted.</div>'}</section>`;
 
   // Coming up
@@ -2436,8 +3045,13 @@ function renderDash() {
 // Open People with these filters set. Sorted by Created, newest first.
 function peopleWith(o = {}) {
   state.q = ''; $('#search').value = '';
-  state.agent = o.agent || ''; state.stage = ''; state.unc = !!o.unc; state.zacct = ''; state.sel.clear(); state.onlyIds = null;
+  state.sl = o.unc ? 'unc' : 'all'; state.dup = false; state.filters = uiFilters(listFilters(listOf(state.sl)));
+  // The Dashboard counts "not contacted" over the last 30 days only, so its links add that window as a Created filter. The People list itself has no cut.
+  if (o.unc) state.filters.push({ id: ++fseq, open: false, key: 'created', op: 'between', rel: [-(NOT_CONTACTED_DAYS - 1), 0], vals: [] });
+  if (o.agent) state.filters.push({ id: ++fseq, open: false, key: 'agent', op: 'any', vals: [o.agent] });
+  state.sel.clear(); state.onlyIds = null;
   state.sort = { key: 'created', dir: 'desc' }; state.limit = SHOW;
+  if (state.showF) renderFPanel();
   renderFilters();
   go('people');
 }
@@ -3023,7 +3637,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -3121,6 +3735,35 @@ function pageTeam(S) {
       <div class="field"><label>Phone</label><input id="nmPhone" aria-label="New member phone"></div></div>
       <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" id="addMember" ${sdis()}>+ Add member</button></div><div class="err" id="setErr"></div></div>`;
 }
+// ───── Smart lists page (v2.4; managers) ─────
+async function lWrite(fn) {
+  const S = state.set; if (S.busy) return false;
+  S.busy = true; renderSettings();
+  let ok = true;
+  try {
+    await fn();
+    state.lists = await api.smartLists(); state.listsVer++;
+    if (!listOf(state.sl)) { state.sl = 'all'; state.dup = false; state.filters = []; }
+  } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
+  S.busy = false; renderSettings(); return ok;
+}
+const listUpd = async (id, patch) => { const r = await api.updateSmartList(id, patch); if (!r || !r.length) throw new Error('Not saved: you do not have access to change this list.'); return r[0]; };
+function pageLists(S) {
+  const rows = teamLists();
+  return subHead('Smart lists', 'The team lists in the People sidebar. Drag to set their order. Renaming, hiding and deleting change the list for everyone. To make a new one, set filters on People and choose "Save as new list".', '<button class="btn primary small" data-golists>Go to People</button>')
+    + `<div class="section" id="listList">${rows.map((l, i) => `<div class="slrow" draggable="${S.busy ? 'false' : 'true'}" data-dnd="list" data-i="${i}" data-list-row="${esc(l.id)}"><span class="grip" aria-hidden="true">⋮⋮</span>
+      <span class="arrows"><button data-smove="list" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : sdis()} aria-label="Move ${esc(l.name)} up">▲</button><button data-smove="list" data-i="${i}" data-d="1" ${i === rows.length - 1 ? 'disabled' : sdis()} aria-label="Move ${esc(l.name)} down">▼</button></span>
+      ${S.edit === 'lname:' + l.id ? `<input class="slname" id="sListName" value="${esc(l.name)}" maxlength="80" aria-label="List name"><button class="btn small primary" data-slnamesave ${sdis()}>Save</button><button class="btn small" data-setcancel>Cancel</button>`
+        : `<b class="flabel">${esc(l.name)}</b><button class="pen" data-slrename="${esc(l.id)}" aria-label="Rename ${esc(l.name)}" ${sdis()} style="opacity:1">${penSvg}</button>`}
+      <span class="spacer"></span>${switchBox('data-slhide', l.id, l.hidden_from_agents, 'Hidden from agents')}
+      <button class="btn small" data-sledit="${esc(l.id)}" ${sdis()}>Edit filters</button><button class="btn small danger" data-sldel="${esc(l.id)}" ${sdis()}>Delete</button></div>`).join('') || '<div class="empty-s">No team lists yet.</div>'}
+    <div class="err" id="setErr"></div></div>`;
+}
+async function reorderLists(from, to) {
+  const rows = teamLists(); if (to < 0 || to >= rows.length || from === to) return;
+  const [m] = rows.splice(from, 1); rows.splice(to, 0, m);
+  await lWrite(async () => { for (let i = 0; i < rows.length; i++) { const want = (i + 1) * 10; if (rows[i].sort_order !== want) await listUpd(rows[i].id, { sort_order: want }); } });
+}
 function pageAbout() {
   return subHead('About', 'The plain facts.') + `<div class="section" id="aboutBox"><div class="dvals"><span class="dlabel">Version</span><span class="dval" id="aboutVersion">${esc(APP_VERSION)}</span><span></span></div>
     <div class="dvals"><span class="dlabel">Supabase plan</span><span class="dval">${esc(SUPABASE_PLAN)}</span><span></span></div>
@@ -3175,7 +3818,7 @@ function pageHome(S) {
     + group('Automation', [soon('⚡', 'Auto responses', 'Emails that go out on their own when a new lead comes in, then follow up.'),
       card('templates', '✉️', 'Email templates', `${cv(tc == null ? '—' : `${tc.toLocaleString('en-US')} template${tc === 1 ? '' : 's'}`)} Write the emails your team sends, with blanks like {First name}.`)])
     + group('Customize', [card('fields', '✍️', 'Custom fields', `${cv(S.fields.length)} labels, order, options`), card('stages', '🧰', 'Stages', `${cv(S.stages.length)} order, closes the lead`),
-      card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), soon('📋', 'Smart lists', 'Order, rename, hide or delete the team lists in the People sidebar.')])
+      card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), card('lists', '📋', 'Smart lists', `${cv(teamLists().length)} order, rename, hide or delete the team lists in the People sidebar.`)])
     + group('Admin', [card('team', '👥', 'Team', `${cv(S.team.length)} who can sign in`),
       card('system', '🩺', 'System check', issues == null ? (S.hbErr ? 'Not available right now' : 'Checking…') : issues ? `${issues} ${issues === 1 ? 'needs' : 'need'} a look` : 'All lead Gmails OK', issues ? 'warn' : ''),
       card('about', 'ⓘ', 'About', `${cv('v' + APP_VERSION)} version and sync`)]);
@@ -3339,7 +3982,7 @@ function renderSettings() {
   if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
   else if (!S.loaded) html = '<div class="loading-s">Loading…</div>';
   else if (!S.page) html = pageHome(S);
-  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, team: pageTeam, about: pageAbout }[S.page](S);
+  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, team: pageTeam, about: pageAbout }[S.page](S);
   const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
   el.innerHTML = html;
   for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm)/.test(id)) x.value = v; }
@@ -3408,7 +4051,23 @@ $('#settingsBody').addEventListener('click', async e => {
   if (el('[data-tpldel]')) { tplDelete(); return; }
   if (el('[data-hbrefresh]')) { if (!S.hbBusy) { S.hbBusy = true; renderSettings(); loadHb(); } return; }
   if (el('[data-setcancel]')) { S.edit = null; renderSettings(); return; }
-  const mv = el('[data-smove]'); if (mv) { if (!mv.disabled) reorder(mv.dataset.smove, +mv.dataset.i, +mv.dataset.i + +mv.dataset.d); return; }
+  const mv = el('[data-smove]'); if (mv) { if (!mv.disabled) (mv.dataset.smove === 'list' ? reorderLists : reorder.bind(null, mv.dataset.smove))(+mv.dataset.i, +mv.dataset.i + +mv.dataset.d); return; }
+  if (el('[data-golists]')) { go('people'); return; }
+  const lr = el('[data-slrename]'); if (lr) { S.edit = 'lname:' + lr.dataset.slrename; renderSettings(); const i = $('#sListName'); if (i) i.focus(); return; }
+  if (el('[data-slnamesave]')) {
+    const l = state.lists.find(x => 'lname:' + x.id === S.edit), name = $('#sListName').value.trim();
+    if (!l) return; if (!name) return setErr('A list needs a name.');
+    if (teamLists().some(x => x.id !== l.id && ciEq(x.name, name)) || ciEq(name, BUILTIN.all.name) || ciEq(name, BUILTIN.unc.name)) return setErr('A list with that name already exists.');
+    if (name === l.name) { S.edit = null; renderSettings(); return; }
+    if (await lWrite(() => listUpd(l.id, { name }))) { S.edit = null; renderSettings(); } return;
+  }
+  const le2 = el('[data-sledit]'); if (le2) { pickList(le2.dataset.sledit); state.showF = true; applyFilterPanel(); go('people'); return; }
+  const ld = el('[data-sldel]'); if (ld) {
+    const l = state.lists.find(x => x.id === ld.dataset.sldel); if (!l) return;
+    showModal(`<h3 id="listDelTitle">Delete "${esc(l.name)}"?</h3><p style="margin:0;color:var(--ink-2)" id="listDelText">The list disappears for everyone. No leads are deleted.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn danger" id="listDelGo">Delete list</button></div>`);
+    $('#listDelGo').onclick = async () => { closeModal(); if (await lWrite(() => api.deleteSmartList(l.id))) toast(`Deleted "${l.name}".`); };
+    return;
+  }
   if (el('#addStage')) {
     const name = $('#newStage').value.trim();
     if (!name) return setErr('Type a stage name.');
@@ -3507,6 +4166,7 @@ $('#settingsBody').addEventListener('change', async e => {
   if (t.dataset.freq != null) { await sWrite(() => api.updateField(t.dataset.freq, { required_for_nonworkable: t.checked })); return; }
   if (t.dataset.fhide != null) { await sWrite(() => api.updateField(t.dataset.fhide, { hidden: t.checked })); return; }
   if (t.dataset.agentstags != null) { await sWrite(() => api.setAgentsTags(t.checked)); return; }
+  if (t.dataset.slhide != null) { await lWrite(() => listUpd(t.dataset.slhide, { hidden_from_agents: t.checked })); return; }
   const m = S.team.find(x => String(x.id) === (t.dataset.mactive || t.dataset.msign || t.dataset.mexp));
   if (!m) return;
   if (t.dataset.mactive != null) return setMember(m, { active: t.checked });
@@ -3534,7 +4194,7 @@ $('#settingsBody').addEventListener('focusin', e => { const T = state.set.tpl, i
 let dndFrom = null;
 $('#settingsBody').addEventListener('dragstart', e => { const r = e.target.closest('[data-dnd]'); if (!r) return; dndFrom = { kind: r.dataset.dnd, i: +r.dataset.i }; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); } catch (_) {} });
 $('#settingsBody').addEventListener('dragover', e => { if (dndFrom && e.target.closest('[data-dnd]')) e.preventDefault(); });
-$('#settingsBody').addEventListener('drop', e => { const r = e.target.closest('[data-dnd]'); if (!r || !dndFrom || r.dataset.dnd !== dndFrom.kind) return; e.preventDefault(); const f = dndFrom; dndFrom = null; reorder(f.kind, f.i, +r.dataset.i); });
+$('#settingsBody').addEventListener('drop', e => { const r = e.target.closest('[data-dnd]'); if (!r || !dndFrom || r.dataset.dnd !== dndFrom.kind) return; e.preventDefault(); const f = dndFrom; dndFrom = null; if (f.kind === 'list') reorderLists(f.i, +r.dataset.i); else reorder(f.kind, f.i, +r.dataset.i); });
 
 // ───────── Start ─────────
 (async function init() {
