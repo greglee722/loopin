@@ -639,6 +639,22 @@ html.noscroll, html.noscroll body { overflow: hidden; }
 th.num-col button { white-space: nowrap; }
 .sm-only { display: none; }
 .tiles.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.tiles.six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 860px) { .tiles.six { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tile .s { overflow-wrap: anywhere; }
+/* v2.2 Calendar report, showings on the lead */
+.evt .bk, .mrow .bk, .calrow .bk { color: var(--ink-3); font-weight: 500; }
+#calReport { margin-top: 16px; }
+.repbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.repbar input[type=date] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); max-width: 100%; }
+#calReport td, #calReport th { white-space: normal; }
+#calReport tr.total td { font-weight: 700; border-top: 2px solid var(--line); }
+.shrow.gone { opacity: .72; } .shrow.gone .shtitle { text-decoration: line-through; color: var(--ink-3); }
+.reschedline { font-size: 12.5px; color: var(--ink-2); }
+.cxform label.opt { display: flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 7px; padding: 8px; }
+.cxform label.opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.cxform textarea { width: 100%; min-height: 60px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.cxform input[type=date], .cxform input[type=time] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); max-width: 100%; }
 @media (max-width: 1180px) { .tiles.five { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .tiles.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .renew-note { margin: 0 0 12px; color: var(--ink-2); max-width: 70ch; }
@@ -724,6 +740,7 @@ button.custcard:hover { border-color: var(--accent); }
   </div>
   <nav class="nav" id="nav" aria-label="Main" hidden>
     <button data-view="dash" aria-current="page">Dashboard</button>
+    <button data-view="calendar">Calendar</button>
     <button data-view="people">People</button>
     <button data-view="renewals" id="navRenew" hidden>Renewals<span class="count" id="renewCount"></span></button>
     <button data-view="settings" id="navSettings" hidden>Settings</button>
@@ -737,6 +754,21 @@ button.custcard:hover { border-color: var(--accent); }
   <section id="view-auth" hidden></section>
 
   <section class="view" id="view-dash" hidden><div id="dash"></div></section>
+
+  <section class="view" id="view-calendar" hidden>
+    <div class="cal-head"><h1 id="calTitle"></h1>
+      <span class="seg" id="calViews"><button data-calview="day">Day</button><button data-calview="week">Week</button><button data-calview="month">Month</button></span>
+      <span class="spacer"></span>
+      <span class="calnav"><button class="btn" data-calnav="-1" aria-label="Back">‹</button><button class="btn" data-calnav="0">Today</button><button class="btn" data-calnav="1" aria-label="Forward">›</button></span>
+      <select class="btn" id="calAgent" aria-label="Whose calendar" hidden></select>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div id="calMsg"></div>
+    <div class="calwrap" id="calGrid"><div class="cal" id="cal"></div></div>
+    <div class="cal-list" id="calList"></div>
+    <div class="month" id="calMonth" hidden></div>
+    <section class="card" id="calReport"></section>
+  </section>
 
   <section class="view" id="view-renew" hidden>
     <div class="listhead"><h1>Renewals</h1></div>
@@ -792,6 +824,7 @@ const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publ
 const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
+const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
@@ -845,9 +878,23 @@ function makeApi(url, key) {
       return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators) };
     },
     async appointments(fromIso, toIso) {
-      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at')
+      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email')
         .gte('starts_at', fromIso).lt('starts_at', toIso).eq('canceled', false).is('canceled_at', null).order('starts_at'));
     },
+    // v2.2: the same rows plus canceled ones and the columns the Calendar, report and cancel flow need.
+    async apptsRange(fromIso, toIso) {
+      return ok(await sb.from('appointments').select(APPT_COLS).gte('starts_at', fromIso).lt('starts_at', toIso).order('starts_at').order('id'));
+    },
+    async leadAppointments(personId) {
+      return ok(await sb.from('appointments').select(APPT_COLS).eq('person_id', personId).order('starts_at', { ascending: false }).order('id'));
+    },
+    // The first synced showing: the report says "Data from <date>".
+    async syncStart() {
+      const r = ok(await sb.from('appointments').select('starts_at').not('calendar_event_id', 'is', null).order('starts_at').limit(1));
+      return r && r[0] ? r[0].starts_at : null;
+    },
+    // One update by id. Row-level security can turn it into a silent no-op, so the rows come back and the caller checks for 0.
+    async updateAppt(id, patch) { return ok(await sb.from('appointments').update(patch).eq('id', id).select(APPT_COLS)); },
     // Collaborators for the leads that have appointments, in chunks of 200 ids so the request URL stays short.
     async apptCollaborators(personIds) {
       const out = [];
@@ -986,6 +1033,8 @@ const state = {
   set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
   view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
+  rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(),
+  cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
 let all = [];                 // every loaded person
@@ -1045,7 +1094,7 @@ document.addEventListener('keydown', e => {
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
   $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
-  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
+  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#view-calendar').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
@@ -1081,7 +1130,8 @@ function resetApp() {
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
-    view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '' });
+    view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
+    rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' } });
   inqCache.clear(); state.sel.clear(); applyTheme(null);
   $('#search').value = '';
   closeModal();
@@ -1110,9 +1160,9 @@ async function start(session) {
     state.fields = fields;
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   state.loading = true;
-  state.view = location.hash === '#people' ? 'people' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
+  state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
   renderMe(); renderFilters(); setChrome(true);
-  loadPeople(myGen); loadAppts(); loadHits(); loadListings();
+  loadPeople(myGen); loadAppts(); loadHits(); loadListings(); loadSyncFrom();
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
   api.settings().then(r => { if (myGen === loadGen) state.agentTags = !!(r && r.agents_create_tags); }).catch(() => {});
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
@@ -1294,6 +1344,7 @@ function rowHtml(p) {
 function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
+  if (state.view === 'calendar') { renderCal(); return; }
   if (state.view === 'renewals' || state.view === 'settings') return;
   syncZFilter();
   const list = filtered(), n = list.length;
@@ -1622,7 +1673,7 @@ function route() {
   const h = location.hash, m = /^#p\/([0-9a-f-]{36})$/i.exec(h);
   if (m && UUID.test(m[1])) { showPanel(m[1].toLowerCase()); return; }
   if (state.open) hidePanel();
-  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
+  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#calendar' ? 'calendar' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
   applyView();
 }
 function go(view) {
@@ -1636,10 +1687,11 @@ function applyView() {
   if (state.view === 'renewals' && !(state.me.role === 'manager' && state.rOn)) state.view = 'dash';
   if (state.view === 'settings' && state.me.role !== 'manager') state.view = 'dash';
   const v = state.view;
-  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings';
+  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings'; $('#view-calendar').hidden = v !== 'calendar';
   document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
   renewChrome();
-  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); }
+  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); }
+  else if (v === 'calendar') loadCal();
   else if (v === 'settings') openSettings();
   else if (v === 'renewals') { if (Date.now() - state.renew.at > 300000) loadListings(); renderRenew(); }
   else renderList();
@@ -1667,6 +1719,7 @@ async function showPanel(id) {
   $('#panel').hidden = false; $('#scrim').hidden = false; document.documentElement.classList.add('noscroll');
   renderPanel();
   if (!byId.has(id) && !state.loading) ensureOpenRow(id);
+  loadLeadAppts(id);
   try {
     const d = await api.person(id);
     if (state.open !== id) return;
@@ -1759,6 +1812,7 @@ function renderPanel() {
     </div>
     <div class="panel-body">${canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
+      <div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
   $('#closePanel').onclick = closePanel;
   for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x) { if (x.type === 'checkbox') x.checked = v; else x.value = v; } }
@@ -1921,6 +1975,35 @@ const dateOnly = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || 
 const daysFromToday = (d) => Math.round((d - dayStart(0)) / 864e5);
 const fmtMonthDay = (d) => d.toLocaleDateString('en-US', d.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
 
+// Calendly titles read "<Renter> and <Agent's name>": show only the renter part (cut at the last " and ").
+const apptTitle = (a) => { const t = String(a.title == null ? '' : a.title), i = a.calendly ? t.toLowerCase().lastIndexOf(' and ') : -1; return i > 0 ? t.slice(0, i) : t; };
+// Other active team members on the showing's lead (the lead's owner, then its collaborators), host excluded. A coordinator's showing shows the agent too.
+// Managers never count: a manager reassigns a lead instead of collaborating on it (Greg 2026-10-29).
+const apptOthers = (a, p, collab = state.apptCollab) => {
+  const ids = [p && p.owner_id, ...(a.person_id ? collab.get(a.person_id) || [] : [])];
+  return [...new Set(ids.filter(id => id && id !== a.member_id))].filter(id => { const m = state.teamMap.get(id); return m && m.active && m.role !== 'manager'; });
+};
+// v2.2 same-day double bookings: one renter + agent + local day shows as ONE row / counts ONCE. Both Google events stay in the data.
+const isShowing = (a) => a.kind === 'showing' || a.kind === 'reshow';
+const isActive = (a) => a.canceled === false && a.canceled_at == null;
+function bookKey(a, t) {
+  if (!a.calendly || !isShowing(a) || !isActive(a)) return null;
+  const who = a.person_id || String(a.invitee_email || '').trim().toLowerCase();
+  return who ? a.member_id + '|' + localKey(t) + '|' + who : null;
+}
+// items: [{ a, t, ... }] sorted by t. Returns one item per group with .ts (all times) and .as (all rows).
+function groupBook(items) {
+  const m = new Map(), out = [];
+  for (const it of items) {
+    const k = bookKey(it.a, it.t); let g = k && m.get(k);
+    if (g) { g.ts.push(it.t); g.as.push(it.a); continue; }
+    g = Object.assign({}, it, { ts: [it.t], as: [it.a] }); out.push(g); if (k) m.set(k, g);
+  }
+  return out;
+}
+const bookedTxt = (n) => n < 2 ? '' : n === 2 ? 'Booked twice' : `Booked ${n} times`;
+const timesTxt = (ts) => ts.map(fmtTime).join(', ');
+
 // Appointments for [start of today, start of today + 8 days) in local time. Reloaded when the Dashboard opens and the data is over 5 minutes old.
 async function loadAppts() {
   if (state.apptBusy || !state.me) return;
@@ -1972,6 +2055,7 @@ function renderDash() {
   const appts = state.appts.map(a => ({ a, t: Date.parse(a.starts_at) })).filter(x => !isNaN(x.t)).sort((x, y) => x.t - y.t);
   const today = appts.filter(x => x.t >= t0 && x.t < t1), coming = appts.filter(x => x.t >= t1 && x.t < t8);
   const next = today.find(x => x.t >= Date.now());
+  const todayG = groupBook(today), comingG = groupBook(coming), nextG = next && todayG.find(g => g.as.includes(next.a));
   const apptsOf = (id) => today.filter(x => x.a.member_id === id).length;
 
   const h = new Date().getHours();
@@ -1983,35 +2067,37 @@ function renderDash() {
   const tile = (k, v, sub, go, cls = '') => go
     ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></button>`
     : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
-  const tiles = `<div class="tiles ${state.rOn && state.me.role === 'manager' ? 'five' : ''}">
+  const showT = (() => {
+    const f = +dayStart(-6), t = +dayStart(1), e = state.rc.get(f + '|' + t);
+    if (state.tileErr) return { v: '—', s: 'could not load' };
+    if (!e) return { v: '…', s: esc(rangeLabel(f, t, true)) };
+    const st = showingStats(e, f, t), per = [...st.per.entries()].filter(([, x]) => x.n > 0).sort((x, y) => y[1].n - x[1].n || memberName(x[0]).localeCompare(memberName(y[0])));
+    const early = state.syncFrom && Date.parse(state.syncFrom) > f ? ' · Data from ' + fmtMonthDay(new Date(state.syncFrom)) : '';
+    return { v: st.total.toLocaleString('en-US'), s: esc(rangeLabel(f, t, true) + early) + (per.length ? '<br>' + esc(per.map(([id, x]) => (firstName(id) || 'Team') + ' ' + x.n).join(' · ')) : '') };
+  })();
+  const renewTile = state.rOn && state.me.role === 'manager', nTiles = 5 + (renewTile ? 1 : 0);
+  const tiles = `<div class="tiles ${nTiles === 6 ? 'six' : 'five'}">
     ${tile('New leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
     ${tile('Leads not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
     ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
-    ${state.rOn && state.me.role === 'manager' ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
+    ${renewTile ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
+    ${tile('Showings, last 7 days', showT.v, showT.s, 'show')}
   </div>`;
 
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
   const plink = (p, label) => `<a href="#p/${esc(p.id)}" class="lnk" data-openlead="${esc(p.id)}">${esc(label || p._name || '(no name)')}</a>`;
   const who = (id) => id ? esc(memberName(id) || 'Team member') : 'Unassigned';
-  // Calendly titles read "<Renter> and <Agent's name>": show only the renter part (cut at the last " and ").
-  const apptTitle = (a) => { const t = String(a.title == null ? '' : a.title), i = a.calendly ? t.toLowerCase().lastIndexOf(' and ') : -1; return i > 0 ? t.slice(0, i) : t; };
-  // Other active team members on the showing's lead (the lead's owner, then its collaborators), host excluded. A coordinator's showing shows the agent too.
-  // Managers never count: a manager reassigns a lead instead of collaborating on it (Greg 2026-10-29).
-  const apptOthers = (a, p) => {
-    const ids = [p && p.owner_id, ...(a.person_id ? state.apptCollab.get(a.person_id) || [] : [])];
-    return [...new Set(ids.filter(id => id && id !== a.member_id))].filter(id => { const m = state.teamMap.get(id); return m && m.active && m.role !== 'manager'; });
-  };
   const apptWho = (a, others) => [who(a.member_id), ...others.map(who)].join(' + ');
 
   // Today's schedule
   const schedule = `<section class="card"><h2>Today's schedule</h2>
     ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : (() => {
-      const rowsT = today.map(({ a, t }) => { const p = a.person_id ? byId.get(a.person_id) : null; return { a, t, p, others: apptOthers(a, p) }; });
+      const rowsT = todayG.map((g) => { const p = g.a.person_id ? byId.get(g.a.person_id) : null; return { a: g.a, t: g.t, g, p, others: apptOthers(g.a, p) }; });
       const slot = 24 + (Math.min(3, 1 + Math.max(0, ...rowsT.map(r => r.others.length))) - 1) * 16;   // one fixed width per list keeps the title column aligned
-      return rowsT.map(({ a, t, p, others }) => {
-      const title = apptTitle(a);
-      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}</div><div class="sub">${apptWho(a, others)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
+      return rowsT.map(({ a, t, g, p, others }) => {
+      const title = apptTitle(a), n = g.as.length;
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div></div>`;
       }).join('');
     })() || '<div class="empty-s">No appointments today.</div>'}</section>`;
 
@@ -2050,10 +2136,10 @@ function renderDash() {
 
   // Coming up
   const comingUp = `<section class="card"><h2>Coming up</h2>
-    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : coming.map(({ a, t }) => {
-      const p = a.person_id ? byId.get(a.person_id) : null;
+    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : comingG.map((g) => {
+      const { a, t } = g, n = g.as.length, p = a.person_id ? byId.get(a.person_id) : null;
       const when = new Date(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(apptTitle(a))}</div><div class="sub">${apptWho(a, apptOthers(a, p))}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
+      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(apptTitle(a) + (n > 1 ? ' · ' + timesTxt(g.ts) : ''))}</div><div class="sub">${apptWho(a, apptOthers(a, p))}${n > 1 ? ' · ' + bookedTxt(n) : ''}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
       return p ? `<button class="li appt apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li appt">${inner}</div>`;
     }).join('') || '<div class="empty-s">No upcoming appointments.</div>'}</section>`;
 
@@ -2106,6 +2192,7 @@ $('#dash').addEventListener('click', e => {
   if (g) {
     const k = g.dataset.go;
     if (k === 'renew') { go('renewals'); return; }
+    if (k === 'show') { Object.assign(state.cal, { preset: '7d', from: '', to: '' }); go('calendar'); return; }
     if (k === 'look') { const el = $('#dash-look'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     else peopleWith({ unc: k === 'unc' });
     return;
@@ -2116,6 +2203,345 @@ $('#dash').addEventListener('click', e => {
   if (o) { e.preventDefault(); openPanel(o.dataset.openlead); }
 });
 $('#dash').addEventListener('change', onChange);
+
+// ───────── Calendar, showings report and cancel (v2.2) ─────────
+// Every write here is an UPDATE of appointments by id (never people, so the FUB sync is not touched).
+const KINDS = { showing: 'Showing', reshow: 'Reshow', other: 'Other' };
+const CANCEL_REASONS = [['renter_canceled', 'Renter canceled'], ['agent_canceled', 'Agent canceled'], ['unit_unavailable', 'Unit no longer available'], ['other', 'Other']];
+const REASON_TXT = Object.fromEntries([...CANCEL_REASONS, ['rescheduled', 'Rescheduled']]);
+const GCAL_NOTE = 'Removed from Google Calendar';   // what the calendar sync writes when an event disappears
+const NO_ACCESS = 'Not saved: you do not have access to this showing.';
+const MS_DAY = 864e5;
+const kindOf = (a) => KINDS[a.kind] ? a.kind : 'other';
+const cancelByCalendly = (a) => a.canceled === true && a.canceled_by == null && a.cancel_note === GCAL_NOTE;
+const reasonText = (a) => cancelByCalendly(a) ? (isShowing(a) ? 'Renter canceled (Calendly)' : GCAL_NOTE) : (REASON_TXT[a.cancel_reason] || 'Canceled');
+const mayCancel = (a) => !!state.me && (state.me.role === 'manager' || a.member_id === state.me.id);   // not gated on canEdit(p): a cancel never writes people
+const addDays = (ms, n) => { const d = new Date(ms); return +new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); };
+const weekStartMs = (ms) => addDays(ms, -((new Date(ms).getDay() + 6) % 7));   // weeks start on Monday
+const fmtMD = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const fmtDT = (t) => { const d = new Date(t); return d.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + fmtMD(+d) + ', ' + fmtTime(+d); };
+function rangeLabel(f, t, short) {
+  const b = addDays(t, -1), fy = new Date(f).getFullYear(), by = new Date(b).getFullYear();
+  if (short) return +f === b ? fmtMD(f) : fmtMD(f) + ' – ' + fmtMD(b);
+  const y = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return +f === b ? y(f) : fy === by ? fmtMD(f) + ' – ' + fmtMD(b) + ', ' + by : y(f) + ' – ' + y(b);
+}
+
+// Rows for [f, t) incl. canceled ones, with the lead collaborators. Cached by range; a write clears the cache.
+const rcFlight = new Map();   // requests in flight, so two draws of the same range ask once
+function getRange(f, t, force) {
+  const key = f + '|' + t, hit = state.rc.get(key);
+  if (hit && !force && Date.now() - hit.at < 300000) return Promise.resolve(hit);
+  const fk = loadGen + '|' + key;
+  if (!rcFlight.has(fk)) rcFlight.set(fk, fetchRange(f, t, key).finally(() => rcFlight.delete(fk)));
+  return rcFlight.get(fk);
+}
+async function fetchRange(f, t, key) {
+  const gen = loadGen;
+  const rows = await api.apptsRange(new Date(f).toISOString(), new Date(t).toISOString());
+  const collab = new Map();
+  try {
+    const ids = [...new Set(rows.map(a => a.person_id).filter(Boolean))];
+    if (ids.length) for (const r of await api.apptCollaborators(ids)) { if (!collab.has(r.person_id)) collab.set(r.person_id, []); collab.get(r.person_id).push(r.member_id); }
+  } catch (_) { collab.clear(); }   // only the extra names are lost
+  const e = { rows, collab, at: Date.now() };
+  if (gen === loadGen) state.rc.set(key, e);
+  return e;
+}
+async function loadSyncFrom() {
+  if (!state.me) return;
+  const gen = loadGen;
+  try { const v = await api.syncStart(); if (gen !== loadGen) return; state.syncFrom = v || null; }
+  catch (_) { if (gen !== loadGen) return; if (state.syncFrom === undefined) state.syncFrom = null; }
+  if (state.view === 'dash') renderDash(); else if (state.view === 'calendar') renderCal();
+}
+async function loadTile() {
+  if (!state.me) return;
+  const gen = loadGen, f = +dayStart(-6), t = +dayStart(1), e = state.rc.get(f + '|' + t);
+  if (e && Date.now() - e.at < 300000) return;
+  try { await getRange(f, t); if (gen === loadGen) state.tileErr = ''; } catch (err) { if (gen !== loadGen) return; state.tileErr = err.message || 'error'; }
+  if (gen === loadGen && state.view === 'dash') renderDash();
+}
+
+// The showings report. A showing counts for the host (member_id). One renter + agent + day counts once.
+function showingStats(e, f, t) {
+  const per = new Map(), seen = new Set(); let total = 0;
+  const slot = (id) => { if (!per.has(id)) per.set(id, { n: 0, c: 0, with: new Map() }); return per.get(id); };
+  for (const a of e.rows) {
+    const ts = Date.parse(a.starts_at);
+    if (!isShowing(a) || a.fub_id != null || isNaN(ts) || ts < f || ts >= t) continue;
+    if (!isActive(a)) { slot(a.member_id).c++; continue; }
+    const k = bookKey(a, ts); if (k) { if (seen.has(k)) continue; seen.add(k); }
+    const s = slot(a.member_id); s.n++; total++;
+    for (const o of apptOthers(a, a.person_id ? byId.get(a.person_id) : null, e.collab)) s.with.set(o, (s.with.get(o) || 0) + 1);
+  }
+  return { per, total };
+}
+function calRange() {
+  const c = state.cal; if (!c.at) c.at = +dayStart(0);
+  const d = new Date(c.at);
+  if (c.view === 'day') return { f: c.at, t: addDays(c.at, 1) };
+  if (c.view === 'week') { const f = weekStartMs(c.at); return { f, t: addDays(f, 7) }; }
+  const first = +new Date(d.getFullYear(), d.getMonth(), 1), last = +new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const g0 = weekStartMs(first), weeks = Math.ceil((Math.round((last - g0) / MS_DAY) + 1) / 7);
+  return { f: g0, t: addDays(g0, weeks * 7), first, last };
+}
+function repRange() {
+  const c = state.cal, n = new Date(), y = n.getFullYear(), m = n.getMonth();
+  if (c.preset === 'month') return { f: +new Date(y, m, 1), t: +new Date(y, m + 1, 1) };
+  if (c.preset === 'last') return { f: +new Date(y, m - 1, 1), t: +new Date(y, m, 1) };
+  if (c.preset === 'custom') { const a = dateOnly(c.from), b = dateOnly(c.to); return a && b && b >= a ? { f: +a, t: addDays(+b, 1) } : null; }
+  return { f: +dayStart(-6), t: +dayStart(1) };
+}
+async function loadCal() {
+  if (!state.me) return;
+  const gen = loadGen, r = calRange(), p = repRange();
+  state.cal.err = '';
+  renderCal();
+  try { await Promise.all([getRange(r.f, r.t), p ? getRange(p.f, p.t) : null, state.syncFrom === undefined ? loadSyncFrom() : null]); }
+  catch (e) { if (gen !== loadGen) return; state.cal.err = e.message || 'error'; }
+  if (gen === loadGen) renderCal();
+}
+
+const fmtHour = (h) => { const hh = Math.floor(h), mm = h % 1 ? '30' : '00'; return `${((hh + 11) % 12) + 1}:${mm} ${hh < 12 ? 'AM' : 'PM'}`; };
+const agentChip = (a, others) => `<span class="evt-who">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'xs')).join('')}<span class="nm">${esc(firstName(a.member_id) || 'Team')}</span></span>`;
+// Events that overlap share the width of the day: each gets a lane, and a group of overlaps splits into equal lanes.
+function lanes(evs) {
+  const out = []; let group = [], end = -1;
+  const close = () => { const n = Math.max(...group.map(g => g.lane)) + 1; group.forEach(g => g.n = n); };
+  evs.slice().sort((p, q) => p.start - q.start || q.len - p.len).forEach(x => {
+    if (group.length && x.start >= end) { close(); group = []; }
+    const busy = group.filter(g => g.x.start + g.x.len > x.start).map(g => g.lane);
+    let lane = 0; while (busy.includes(lane)) lane++;
+    const g = { x, lane }; group.push(g); out.push(g); end = Math.max(end, x.start + x.len);
+  });
+  if (group.length) close();
+  return out;
+}
+function renderCal() {
+  if (state.view !== 'calendar' || !state.me) return;
+  const c = state.cal, mgr = state.me.role === 'manager', r = calRange(), e = state.rc.get(r.f + '|' + r.t);
+  $('#calViews').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.calview === c.view));
+  const sel = $('#calAgent'); sel.hidden = !mgr;
+  if (mgr) sel.innerHTML = '<option value="">Everyone</option>' + state.team.filter(m => m.active || m.id === c.agent).map(m => `<option value="${esc(m.id)}" ${c.agent === m.id ? 'selected' : ''}>${esc(m.full_name)}${m.id === state.me.id ? ' (me)' : ''}</option>`).join('');
+  $('#legend').innerHTML = Object.entries(KINDS).map(([k, t]) => `<span class="lg k-${k}">${t}</span>`).join('') + (mgr ? '' : '<span class="locked">Only your own showings are shown.</span>');
+  const d0 = new Date(c.at), fmt = (ms, o) => new Date(ms).toLocaleDateString('en-US', o);
+  const days = c.view === 'day' ? [c.at] : c.view === 'week' ? Array.from({ length: 7 }, (_, i) => addDays(r.f, i)) : [];
+  $('#calTitle').textContent = c.view === 'month' ? d0.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : c.view === 'day' ? d0.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    : rangeLabel(r.f, r.t);
+  $('#calGrid').hidden = $('#calList').hidden = c.view === 'month'; $('#calMonth').hidden = c.view !== 'month';
+  $('#calMsg').innerHTML = c.err ? `<div class="empty-s err">Could not load the calendar: ${esc(c.err)} <button class="btn small" data-calretry>Try again</button></div>` : !e ? '<div class="empty-s">Loading…</div>' : '';
+  renderReport();
+  if (!e) { $('#cal').innerHTML = $('#calList').innerHTML = $('#calMonth').innerHTML = ''; return; }
+  const evs = e.rows.filter(a => isActive(a) && (mgr ? !c.agent || a.member_id === c.agent : a.member_id === state.me.id)).map(a => {
+    const t = Date.parse(a.starts_at), dd = new Date(t), start = dd.getHours() + dd.getMinutes() / 60, en = Date.parse(a.ends_at);
+    return isNaN(t) ? null : { a, t, day: localKey(t), start, len: Math.max(.25, Math.min(isNaN(en) ? 1 : (en - t) / 36e5, 24 - start)), others: apptOthers(a, a.person_id ? byId.get(a.person_id) : null, e.collab) };
+  }).filter(Boolean).sort((x, y) => x.t - y.t || (x.a.id < y.a.id ? -1 : 1));
+  const cnt = new Map(); evs.forEach(x => { const k = bookKey(x.a, x.t); if (k) cnt.set(k, (cnt.get(k) || 0) + 1); });
+  const bk = (x) => { const k = bookKey(x.a, x.t); return k ? bookedTxt(cnt.get(k)) : ''; };
+  const tip = (x) => `${KINDS[kindOf(x.a)]} · ${memberName(x.a.member_id) || 'Team member'} · ${fmtTime(x.t)} · ${apptTitle(x.a)}${bk(x) ? ' · ' + bk(x) : ''}`;
+  const grouped = (list) => groupBook(list.map(x => Object.assign({}, x)));   // one row per renter + agent + day
+  if (c.view === 'month') {
+    const MAX = 3; let html = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(dn => `<div class="mh">${dn}</div>`).join('');
+    const todayK = localKey(Date.now());
+    for (let ms = r.f; ms < r.t; ms = addDays(ms, 1)) {
+      const k = localKey(ms), day = grouped(evs.filter(x => x.day === k));
+      html += `<div class="mcell ${ms < r.first || ms > r.last ? 'out' : ''} ${k === todayK ? 'today' : ''}"><button class="mdate" data-calday="${k}" title="Open ${esc(fmt(ms, { weekday: 'long', month: 'long', day: 'numeric' }))}">${new Date(ms).getDate()}</button>`
+        + day.slice(0, MAX).map(g => `<button class="mrow k-${kindOf(g.a)}" data-appt="${esc(g.a.id)}" data-m="${esc(g.a.member_id)}" title="${esc(tip(g) + (g.as.length > 1 ? ' · ' + timesTxt(g.ts) : ''))}">${avatar(g.a.member_id, 'xs')}<span class="mt"><b>${esc(g.as.length > 1 ? timesTxt(g.ts) : fmtTime(g.t).replace(':00', ''))}</b> ${esc(apptTitle(g.a))}</span></button>`).join('')
+        + (day.length > MAX ? `<button class="more" data-calday="${k}">${day.length - MAX} more</button>` : '') + '</div>';
+    }
+    $('#calMonth').innerHTML = html;
+    return;
+  }
+  const H0 = Math.min(9, ...evs.map(x => Math.floor(x.start))), H1 = Math.min(24, Math.max(20, ...evs.map(x => Math.ceil(x.start + x.len)))), PX = 44;
+  $('#cal').style.gridTemplateColumns = `56px repeat(${days.length}, minmax(110px, 1fr))`;
+  $('#cal').style.minWidth = c.view === 'day' ? '0' : '';
+  const todayK = localKey(Date.now());
+  let html = '<div class="dh"></div>' + days.map(ms => `<button class="dh ${localKey(ms) === todayK ? 'today' : ''}" data-calday="${localKey(ms)}" title="Open this day">${esc(fmt(ms, { weekday: 'short' }))}<b>${new Date(ms).getDate()}</b></button>`).join('');
+  html += `<div>${Array.from({ length: H1 - H0 }, (_, i) => `<div class="hr">${fmtHour(H0 + i)}</div>`).join('')}</div>`;
+  days.forEach(ms => {
+    html += `<div class="col" data-day="${localKey(ms)}" style="height:${(H1 - H0) * PX}px">` + lanes(evs.filter(x => x.day === localKey(ms))).map(({ x, lane, n }) =>
+      `<button class="evt k-${kindOf(x.a)} ${n >= 3 && c.view === 'week' ? 'tight' : ''}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}" style="top:${(x.start - H0) * PX + 2}px;height:${x.len * PX - 4}px;left:calc(${lane * 100 / n}% + 2px);width:calc(${100 / n}% - 4px)" title="${esc(tip(x))}">${agentChip(x.a, x.others)}<span class="evt-what"><b>${esc(fmtTime(x.t))}</b> <span class="tt">${esc(apptTitle(x.a))}</span>${bk(x) ? ` <span class="bk">· ${esc(bk(x))}</span>` : ''}</span></button>`).join('') + '</div>';
+  });
+  $('#cal').innerHTML = html;
+  $('#calList').innerHTML = days.map(ms => {
+    const g = grouped(evs.filter(x => x.day === localKey(ms)));
+    if (!g.length) return c.view === 'day' ? '<div class="section"><div class="empty-s">No showings or events this day.</div></div>' : '';
+    return `<div class="section"><h4>${esc(fmt(ms, { weekday: 'short', month: 'short', day: 'numeric' }))}</h4>${g.map(x => `<button class="inq calrow k-${kindOf(x.a)}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}"><div class="row" style="justify-content:space-between"><b>${esc(timesTxt(x.ts))} · ${esc(KINDS[kindOf(x.a)])}</b>${agentChip(x.a, x.others)}</div><div>${esc(apptTitle(x.a))}${x.as.length > 1 ? ` <span class="bk">· ${esc(bookedTxt(x.as.length))}</span>` : ''}</div></button>`).join('')}</div>`;
+  }).join('') || '<div class="section"><div class="empty-s">Nothing this week.</div></div>';
+}
+function renderReport() {
+  const c = state.cal, el = $('#calReport'), pr = repRange(), mgr = state.me.role === 'manager';
+  const e = pr && state.rc.get(pr.f + '|' + pr.t);
+  const presets = [['7d', 'Last 7 days'], ['month', 'This month'], ['last', 'Last month'], ['custom', 'Custom']];
+  let body;
+  if (!pr) body = '<div class="empty-s">Pick a start and an end date.</div>';
+  else if (!e) body = c.err ? `<div class="empty-s err">${esc(c.err)}</div>` : '<div class="empty-s">Loading…</div>';
+  else {
+    const st = showingStats(e, pr.f, pr.t);
+    const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys()])] : [state.me.id];
+    const sum = ids.reduce((s, id) => { const x = st.per.get(id) || { n: 0, c: 0 }; return [s[0] + x.n, s[1] + x.c]; }, [0, 0]);
+    body = `<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Showings</th><th>Collab</th><th>Canceled</th></tr></thead><tbody>${ids.map(id => {
+      const x = st.per.get(id) || { n: 0, c: 0, with: new Map() };
+      const w = [...x.with.entries()].sort((p, q) => q[1] - p[1] || memberName(p[0]).localeCompare(memberName(q[0]))).map(([m, k]) => `${k} with ${firstName(m) || 'Team'}`).join(', ');
+      return `<tr data-rep="${esc(id)}"><td>${mgr ? `<button class="agentlink" data-calagent="${esc(id)}" title="See ${esc(memberName(id))}'s calendar">${avatar(id, 'sm')}${esc(memberName(id) || 'Team member')}</button>` : `<span class="agentlink">${avatar(id, 'sm')}${esc(memberName(id))}</span>`}</td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td></tr>`;
+    }).join('')}<tr class="total"><td>Total</td><td class="num">${sum[0]}</td><td></td><td class="num">${sum[1]}</td></tr></tbody></table></div>`;
+  }
+  el.innerHTML = `<h2>Showings${pr ? ' · ' + esc(rangeLabel(pr.f, pr.t)) : ''}${state.syncFrom ? `<span class="sub" style="font-weight:500">Data from ${esc(fmtShort(state.syncFrom))}</span>` : ''}</h2>
+    <div class="repbar"><span class="seg" id="repPresets">${presets.map(([k, t]) => `<button data-preset="${k}" aria-pressed="${c.preset === k}">${t}</button>`).join('')}</span>
+    ${c.preset === 'custom' ? `<input type="date" id="repFrom" aria-label="From" value="${esc(c.from)}"><span class="sub">to</span><input type="date" id="repTo" aria-label="To" value="${esc(c.to)}">` : ''}</div>${body}`;
+}
+function findAppt(id) {
+  for (const e of state.rc.values()) { const a = e.rows.find(x => x.id === id); if (a) return a; }
+  for (const e of state.leadAppts.values()) { const a = (e.rows || []).find(x => x.id === id); if (a) return a; }
+  return null;
+}
+function apptPop(a) {
+  const t = Date.parse(a.starts_at), can = isShowing(a) && isActive(a) && mayCancel(a);
+  showModal(`<h3 id="popTitle">${esc(apptTitle(a) || 'Event')}</h3><div class="sub" id="popSub">${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))} · ${esc(memberName(a.member_id) || 'Team member')}</div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button>${can ? '<button class="btn danger" id="popCancel">Cancel showing</button>' : ''}</div>`);
+  if (can) $('#popCancel').onclick = () => askCancel(a);
+}
+$('#view-calendar').addEventListener('click', e => {
+  const t = e.target, c = state.cal;
+  if (t.closest('[data-calretry]')) { loadCal(); return; }
+  const ap = t.closest('[data-appt]'); if (ap) { const a = findAppt(ap.dataset.appt); if (a) { if (a.person_id) openPanel(a.person_id); else apptPop(a); } return; }
+  const v = t.closest('[data-calview]'); if (v) { c.view = v.dataset.calview; loadCal(); return; }
+  const d = t.closest('[data-calday]'); if (d) { c.at = +dateOnly(d.dataset.calday); c.view = 'day'; loadCal(); return; }
+  const nav = t.closest('[data-calnav]');
+  if (nav) {
+    const step = +nav.dataset.calnav, dd = new Date(c.at || +dayStart(0));
+    if (!step) c.at = +dayStart(0);
+    else if (c.view === 'month') c.at = +new Date(dd.getFullYear(), dd.getMonth() + step, 1);
+    else c.at = addDays(c.at, step * (c.view === 'day' ? 1 : 7));
+    loadCal(); return;
+  }
+  const pr = t.closest('[data-preset]'); if (pr) { c.preset = pr.dataset.preset; loadCal(); return; }
+  const ag = t.closest('[data-calagent]');
+  if (ag) {
+    c.agent = ag.dataset.calagent; const r = repRange();
+    if (r) {   // the smallest view that holds the range: a day, a Monday-week, else the month of its last day
+      const last = addDays(r.t, -1);
+      if (last === r.f) { c.view = 'day'; c.at = r.f; } else if (weekStartMs(r.f) === weekStartMs(last)) { c.view = 'week'; c.at = r.f; } else { c.view = 'month'; c.at = last; }
+    }
+    loadCal(); window.scrollTo(0, 0);
+  }
+});
+$('#view-calendar').addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'calAgent') { state.cal.agent = t.value; renderCal(); }
+  else if (t.id === 'repFrom' || t.id === 'repTo') { state.cal[t.id === 'repFrom' ? 'from' : 'to'] = t.value; loadCal(); }
+});
+
+// ───────── Cancel / reschedule a showing ─────────
+function afterApptWrite(pid) {
+  state.rc.clear(); rcFlight.clear(); state.apptsAt = 0; loadAppts();
+  if (pid) loadLeadAppts(pid);
+  if (state.view === 'calendar') loadCal(); else if (state.view === 'dash') loadTile();
+}
+const cxErr = (m) => { const e = $('#cxErr'); if (e) e.textContent = m; return false; };
+const cxSub = (a) => `<div class="sub">${esc(apptTitle(a))} · ${esc(fmtDT(Date.parse(a.starts_at)))}</div>`;
+function askCancel(a) {
+  if (!mayCancel(a)) { toast('You can only cancel your own showings.'); return; }
+  showModal(`<h3 id="cxQ">Reschedule or cancel?</h3>${cxSub(a)}
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button><button class="btn" id="cxResch">Reschedule</button><button class="btn danger" id="cxCancel">Cancel the showing</button></div>`);
+  $('#cxResch').onclick = () => rescheduleForm(a);
+  $('#cxCancel').onclick = () => cancelForm(a, false);
+}
+function rescheduleForm(a) {
+  if (a.calendar_event_id) {   // a synced Calendly showing moves in Calendly; LoopIn reads it back. No write here.
+    showModal(`<h3 id="cxQ">Reschedule it in Calendly</h3><p id="cxCalMsg" style="margin:0">Reschedule it in Calendly. LoopIn updates within 5 minutes.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button></div>`);
+    return;
+  }
+  const d = new Date(Date.parse(a.starts_at));
+  showModal(`<h3 id="cxQ">Reschedule</h3>${cxSub(a)}<div class="cxform"><div class="fields"><div class="field"><label for="rsDate">Date</label><input type="date" id="rsDate" value="${esc(localKey(d))}"></div>
+    <div class="field"><label for="rsTime">Time</label><input type="time" id="rsTime" value="${pad2(d.getHours())}:${pad2(d.getMinutes())}" step="900"></div></div><div class="err" id="cxErr"></div></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button><button class="btn primary" id="rsGo">Move showing</button></div>`);
+  $('#rsGo').onclick = () => submitReschedule(a, $('#rsDate').value, $('#rsTime').value);
+}
+async function submitReschedule(a, date, time) {
+  if (!mayCancel(a)) return cxErr('You can only move your own showings.');
+  if (a.calendar_event_id) return cxErr('Reschedule it in Calendly. LoopIn updates within 5 minutes.');
+  const dt = dateOnly(date), m = /^(\d{2}):(\d{2})$/.exec(time || '');
+  if (!dt || !m) return cxErr('Pick a date and a time.');
+  const start = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), +m[1], +m[2]), len = Date.parse(a.ends_at) - Date.parse(a.starts_at);
+  const btn = $('#rsGo'); if (btn) btn.disabled = true;
+  try {
+    const rows = await api.updateAppt(a.id, { starts_at: start.toISOString(), ends_at: new Date(+start + (len > 0 ? len : 36e5)).toISOString() });
+    if (!rows || !rows.length) throw new Error(NO_ACCESS);
+  } catch (e) { if (btn) btn.disabled = false; toast(e.message); return cxErr(e.message); }
+  closeModal(); toast('Showing moved.'); afterApptWrite(a.person_id); return true;
+}
+function cancelForm(a, edit) {
+  const cur = edit ? (cancelByCalendly(a) && isShowing(a) ? 'renter_canceled' : a.cancel_reason) : '', note = edit && !cancelByCalendly(a) ? a.cancel_note || '' : '';
+  showModal(`<h3 id="cxQ">${edit ? 'Change the reason' : 'Cancel the showing'}</h3>${cxSub(a)}
+    <div class="cxform"><div class="reasons">${CANCEL_REASONS.map(([k, t]) => `<label><input type="radio" name="cx_reason" value="${k}" ${cur === k ? 'checked' : ''}> ${esc(t)}</label>`).join('')}</div>
+    <div class="field"><label for="cxNote">Note (needed for Other)</label><textarea id="cxNote">${esc(note)}</textarea></div>
+    ${!edit && a.calendar_event_id ? '<div class="sub" id="cxCalWarn">Also cancel it in Calendly so the renter gets the notice. LoopIn cannot change Calendly.</div>' : ''}
+    <div class="err" id="cxErr"></div></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button><button class="btn ${edit ? 'primary' : 'danger'}" id="cxGo">${edit ? 'Save reason' : 'Cancel showing'}</button></div>`);
+  $('#cxGo').onclick = () => submitCancel(a, ((document.querySelector('#modal [name="cx_reason"]:checked') || {}).value || ''), $('#cxNote').value, edit);
+}
+async function submitCancel(a, reason, note, edit) {
+  if (!mayCancel(a)) return cxErr('You can only change your own showings.');
+  if (!REASON_TXT[reason] || reason === 'rescheduled') return cxErr('Pick a reason.');
+  note = String(note || '').trim();
+  if (reason === 'other' && !note) return cxErr('Add a short note for Other.');
+  const base = { cancel_reason: reason, cancel_note: note || null, canceled_by: state.me.id };
+  const patch = edit ? base : Object.assign({ canceled: true, canceled_at: new Date().toISOString() }, base);
+  const btn = $('#cxGo'); if (btn) btn.disabled = true;
+  try {
+    const rows = await api.updateAppt(a.id, patch);
+    if (!rows || !rows.length) throw new Error(NO_ACCESS);   // row-level security can turn the update into a silent no-op
+  } catch (e) { if (btn) btn.disabled = false; toast(e.message || 'Not saved.'); return cxErr(e.message || 'Not saved.'); }
+  closeModal(); toast(edit ? 'Reason saved.' : 'Showing canceled.'); afterApptWrite(a.person_id); return true;
+}
+
+// ───────── Showings on the lead ─────────
+async function loadLeadAppts(id) {
+  const gen = loadGen, cur = state.leadAppts.get(id);
+  state.leadAppts.set(id, { rows: cur ? cur.rows : null, err: '' });
+  try { const rows = await api.leadAppointments(id); if (gen !== loadGen) return; state.leadAppts.set(id, { rows, err: '' }); }
+  catch (e) { if (gen !== loadGen) return; state.leadAppts.set(id, { rows: cur ? cur.rows : null, err: e.message || 'error' }); }
+  if (state.open === id) renderPanel();
+}
+// A canceled synced showing + a later synced booking for the same lead and agent, created 0 to 7 days after the cancel = a reschedule. Computed, no column.
+function rescheduleLinks(rows) {
+  const out = new Map(), used = new Set();
+  rows.filter(a => a.calendar_event_id && isShowing(a) && a.canceled === true && a.canceled_at).sort((x, y) => Date.parse(x.canceled_at) - Date.parse(y.canceled_at)).forEach(o => {
+    const c0 = Date.parse(o.canceled_at);
+    const to = rows.filter(r => r.id !== o.id && r.calendar_event_id && isShowing(r) && isActive(r) && r.person_id === o.person_id && r.member_id === o.member_id && !used.has(r.id)
+      && Date.parse(r.created_at) >= c0 && Date.parse(r.created_at) <= c0 + 7 * MS_DAY).sort((x, y) => Date.parse(x.created_at) - Date.parse(y.created_at))[0];
+    if (to) { used.add(to.id); out.set(o.id, { from: o, to }); out.set(to.id, { from: o, to }); }
+  });
+  return out;
+}
+function showingsHtml(p) {
+  const e = state.leadAppts.get(p.id);
+  if (!e || (!e.rows && !e.err)) return '<div class="loading-s">Loading…</div>';
+  if (!e.rows) return `<div class="err-s">${esc(e.err)}</div>`;
+  if (!e.rows.length) return '<div class="sub">No showings yet.</div>';
+  const links = rescheduleLinks(e.rows), now = Date.now();
+  return e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => {
+    const t = Date.parse(a.starts_at), gone = a.canceled === true || a.canceled_at != null, lk = links.get(a.id);
+    const who = a.canceled_by ? (firstName(a.canceled_by) || 'Team member') : 'Calendly';
+    const note = a.cancel_note && !cancelByCalendly(a) ? `<br>${esc(a.cancel_note)}` : '';
+    const acts = (isShowing(a) && !gone && t > now && mayCancel(a) ? `<button class="btn small" data-apptcancel="${esc(a.id)}">Cancel showing</button>` : '')
+      + (isShowing(a) && gone && mayCancel(a) ? `<button class="btn small" data-appteditreason="${esc(a.id)}">Edit reason</button>` : '');
+    return `<div class="inq shrow ${gone ? 'gone' : ''}" data-shrow="${esc(a.id)}"><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
+      <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}</div>
+      ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
+      ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
+  }).join('');
+}
+$('#panel').addEventListener('click', e => {
+  const c = e.target.closest('[data-apptcancel]'), r = e.target.closest('[data-appteditreason]');
+  const id = c ? c.dataset.apptcancel : r ? r.dataset.appteditreason : null; if (!id) return;
+  const rows = (state.leadAppts.get(state.open) || {}).rows || [], a = rows.find(x => x.id === id);
+  if (!a) return;
+  if (c) askCancel(a); else if (mayCancel(a)) cancelForm(a, true); else toast('You can only change your own showings.');
+});
 
 // ───────── Renewals (Step 1: read-only; nothing here changes anything in Zillow) ─────────
 // The list comes from zillow_listings (managers only). If that table does not exist yet, the tab and the tile stay hidden.
@@ -2341,7 +2767,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
