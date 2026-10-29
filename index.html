@@ -512,7 +512,7 @@ tr.unread .name { font-weight: 700; }
 .apptrow { width: 100%; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; color: var(--ink); font: inherit; cursor: pointer; }
 .apptrow:hover { background: var(--surface-2); }
 .apptrow:last-child { border-bottom: 0; }
-.apptrow .time { min-width: 92px; line-height: 1.3; }
+.appt .time { min-width: 92px; line-height: 1.3; }  /* every Coming up row, linked or not, so the columns line up */
 .bars { display: grid; gap: 8px; padding: 12px 16px; }
 .bar { display: grid; grid-template-columns: 120px minmax(0, 1fr) 28px; gap: 8px; align-items: center; font-size: 13px; }
 .bar .track { background: var(--surface-2); border-radius: 4px; height: 10px; overflow: hidden; } .bar .fill { display: block; background: var(--accent); height: 100%; border-radius: 4px; }
@@ -1979,14 +1979,11 @@ function renderDash() {
   const plink = (p, label) => `<a href="#p/${esc(p.id)}" class="lnk" data-openlead="${esc(p.id)}">${esc(label || p._name || '(no name)')}</a>`;
   const who = (id) => id ? esc(memberName(id) || 'Team member') : 'Unassigned';
 
-  // A booking that came in through Calendly (the calendar sync sets the flag). A synced row may have no lead; it then shows as plain text.
-  const calTag = (a) => a.calendly ? ' <span class="pill info" title="Booked through Calendly">Calendly</span>' : '';
-
   // Today's schedule
   const schedule = `<section class="card"><h2>Today's schedule</h2>
     ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : today.map(({ a, t }) => {
       const p = a.person_id ? byId.get(a.person_id) : null;
-      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span>${avatar(a.member_id, 'sm')}<div class="grow"><div class="name">${p ? plink(p, a.title) : esc(a.title)}${calTag(a)}</div><div class="sub">${who(a.member_id)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span>${avatar(a.member_id, 'sm')}<div class="grow"><div class="name">${p ? plink(p, a.title) : esc(a.title)}</div><div class="sub">${who(a.member_id)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
     }).join('') || '<div class="empty-s">No appointments today.</div>'}</section>`;
 
   // Team Hit Lists (read-only): only agents who use LoopIn
@@ -2027,8 +2024,8 @@ function renderDash() {
     ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : coming.map(({ a, t }) => {
       const p = a.person_id ? byId.get(a.person_id) : null;
       const when = new Date(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(a.title)}${calTag(a)}</div><div class="sub">${who(a.member_id)}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
-      return p ? `<button class="li apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li">${inner}</div>`;
+      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(a.title)}</div><div class="sub">${who(a.member_id)}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
+      return p ? `<button class="li appt apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li appt">${inner}</div>`;
     }).join('') || '<div class="empty-s">No upcoming appointments.</div>'}</section>`;
 
   // Leads by source, this week
@@ -2315,7 +2312,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '1.9';
+const APP_VERSION = '2.0';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
