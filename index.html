@@ -842,7 +842,7 @@ function makeApi(url, key) {
       return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators) };
     },
     async appointments(fromIso, toIso) {
-      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,canceled,canceled_at')
+      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at')
         .gte('starts_at', fromIso).lt('starts_at', toIso).eq('canceled', false).is('canceled_at', null).order('starts_at'));
     },
     async hitLists() {
@@ -1673,7 +1673,8 @@ const editbox = (inner, dis = '') => `<div class="editbox">${inner}<div class="e
 function noteHtml(n, p) {
   const kind = String(n.kind || 'note').replace(/[^a-z_]/g, '');
   const label = { calendly: 'Calendly answers · ', text_log: 'Text logged · ', email: 'Email · ' }[kind] || '';
-  const who = n.author_id ? (memberName(n.author_id) || 'Team member') : 'FUB';
+  // No author: the calendar sync wrote it (kind calendly), else the FUB import did.
+  const who = n.author_id ? (memberName(n.author_id) || 'Team member') : kind === 'calendly' ? 'Calendar sync' : 'FUB';
   const can = p && canEdit(p) && canEditNote(n), dis = p && busy.has(p.id) ? 'disabled' : '';
   if (can && state.edit === 'note:' + n.id) return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}</div>${editbox(`<textarea id="eNote" aria-label="Edit note">${esc(n.body)}</textarea>`, dis)}</div>`;
   return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}${can ? ` <span class="spacer"></span><button class="pen" data-edit="note:${esc(n.id)}" aria-label="Edit note" ${dis}>${penSvg}</button><button class="pen" data-del="note" data-id="${esc(n.id)}" aria-label="Delete note" ${dis}>×</button>` : ''}</div><pre>${esc(n.body)}</pre></div>`;
@@ -1978,11 +1979,14 @@ function renderDash() {
   const plink = (p, label) => `<a href="#p/${esc(p.id)}" class="lnk" data-openlead="${esc(p.id)}">${esc(label || p._name || '(no name)')}</a>`;
   const who = (id) => id ? esc(memberName(id) || 'Team member') : 'Unassigned';
 
+  // A booking that came in through Calendly (the calendar sync sets the flag). A synced row may have no lead; it then shows as plain text.
+  const calTag = (a) => a.calendly ? ' <span class="pill info" title="Booked through Calendly">Calendly</span>' : '';
+
   // Today's schedule
   const schedule = `<section class="card"><h2>Today's schedule</h2>
     ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : today.map(({ a, t }) => {
       const p = a.person_id ? byId.get(a.person_id) : null;
-      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span>${avatar(a.member_id, 'sm')}<div class="grow"><div class="name">${p ? plink(p, a.title) : esc(a.title)}</div><div class="sub">${who(a.member_id)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span>${avatar(a.member_id, 'sm')}<div class="grow"><div class="name">${p ? plink(p, a.title) : esc(a.title)}${calTag(a)}</div><div class="sub">${who(a.member_id)}${next && next.a === a ? ' · next up' : t < Date.now() ? ' · done' : ''}</div></div></div>`;
     }).join('') || '<div class="empty-s">No appointments today.</div>'}</section>`;
 
   // Team Hit Lists (read-only): only agents who use LoopIn
@@ -2023,7 +2027,7 @@ function renderDash() {
     ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : coming.map(({ a, t }) => {
       const p = a.person_id ? byId.get(a.person_id) : null;
       const when = new Date(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(a.title)}</div><div class="sub">${who(a.member_id)}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
+      const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(a.title)}${calTag(a)}</div><div class="sub">${who(a.member_id)}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
       return p ? `<button class="li apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li">${inner}</div>`;
     }).join('') || '<div class="empty-s">No upcoming appointments.</div>'}</section>`;
 
@@ -2311,7 +2315,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.9';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
