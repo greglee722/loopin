@@ -301,6 +301,11 @@ tr.unread .pc-top .name { font-weight: 700; }
 .note pre { white-space: pre-wrap; font-family: var(--font); margin: 4px 0 0; }
 textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); resize: vertical; }
 .dupe { background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; }
+.dupmark { margin-top: 2px; } tr.grp1 td { background: var(--surface-2); }
+.mlist { display: grid; gap: 8px; }
+.mrow { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.mrow:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.mrow .mmain { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .inq { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px dashed var(--line); } .inq:last-child { border: 0; }
 /* Lead as its own page: FUB-style three columns */
 .lp { display: grid; grid-template-columns: 320px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
@@ -787,6 +792,7 @@ button.custcard:hover { border-color: var(--accent); }
       <select class="btn" id="fStage" aria-label="Stage"></select>
       <select class="btn" id="fZ" aria-label="Zillow account"></select>
       <button class="btn" id="fUnc" aria-pressed="false">Not contacted (30 days)</button>
+      <button class="btn" id="fDup" aria-pressed="false" hidden></button>
       <div class="spacer"></div>
       <div class="countline"><span id="count" aria-live="polite"></span><button class="btn small" id="exportShown" hidden></button><span class="loadmsg" id="loadmsg"></span></div>
     </div>
@@ -821,7 +827,7 @@ const SUPABASE_URL = 'https://qxzdwpzhpubcufhvjwjk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publishable: safe in public code
 
 // The columns one list row needs. Writes ask for the same columns back.
-const PERSON_COLS_BASE = 'id,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
+const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
@@ -965,6 +971,22 @@ function makeApi(url, key) {
     async addNote(personId, meId, body) {
       return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: 'note', body }).select(NOTE_COLS).single());
     },
+    // v2.3 (supabase/12): possible duplicates and merge. Managers only; the database refuses anyone else.
+    async duplicateDismissals() {
+      const out = [];
+      for (let from = 0; ; from += 1000) {
+        const r = ok(await sb.from('duplicate_dismissals').select('a,b').order('a').order('b').range(from, from + 999));
+        out.push(...r); if (r.length < 1000) return out;
+      }
+    },
+    // a must sort before b (the table has a check). The caller orders the pair; ignoreDuplicates makes a repeat harmless.
+    async dismissDuplicate(a, b) { ok(await sb.from('duplicate_dismissals').upsert({ a, b }, { onConflict: 'a,b', ignoreDuplicates: true })); },
+    async mergePeople(survivorId, mergedId) { return ok(await sb.rpc('pl_merge_people', { p_survivor: survivorId, p_merged: mergedId })); },
+    async unmergePeople(logId) { return ok(await sb.rpc('pl_unmerge', { p_log: logId })); },
+    // The merges into one lead that are not undone. note_id is the "Merged with" note, so the timeline can offer Undo on it.
+    async mergeLogs(survivorId) {
+      return ok(await sb.from('merge_log').select('id,merged_id,created_at,note_id:snapshot->>note_id').eq('survivor_id', survivorId).is('undone_at', null).order('created_at', { ascending: false }));
+    },
   };
 }
 // The test harness sets window.LOOPIN_API first, so no real database is touched in tests.
@@ -1035,6 +1057,7 @@ const state = {
   view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
   rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(),
   cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
+  dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null,   // v2.3: the duplicates filter, feature on/off, change counter, dismissed pairs, the open merge
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
 let all = [];                 // every loaded person
@@ -1057,6 +1080,16 @@ function setRow(r) {
   prep(r);
   if (idx.has(r.id)) all[idx.get(r.id)] = r; else { idx.set(r.id, all.length); all.push(r); }
   byId.set(r.id, r);
+  state.dupVer++;
+}
+// A merged lead leaves the loaded list (the database hides it from the People query too).
+function dropRow(id) {
+  if (!idx.has(id)) return;
+  all = all.filter(p => p.id !== id);
+  idx.clear(); all.forEach((p, i) => idx.set(p.id, i));
+  byId.delete(id); state.sel.delete(id); pend.delete(id); busy.delete(id); inqCache.delete(id);
+  if (state.total != null && state.total > 0) state.total--;
+  state.dupVer++;
 }
 const zLocal = (a) => String(a || '').split('@')[0];
 const isMissingZ = (e) => !!e && (e.code === '42703' || /zillow_account/i.test(e.message || ''));
@@ -1079,12 +1112,13 @@ function setTeam(rows) {
 
 // ───────── Toast and modal ─────────
 let toastTimer;
-function toast(msg, ms = 4500) {
-  const t = $('#toast'); t.innerHTML = `<span>${esc(msg)}</span>`; t.hidden = false;
+function toast(msg, ms = 4500, action = null) {
+  const t = $('#toast'); t.innerHTML = `<span>${esc(msg)}</span>` + (action ? `<button type="button" id="toastAct">${esc(action.label)}</button>` : ''); t.hidden = false;
+  if (action) $('#toastAct').onclick = () => { clearTimeout(toastTimer); t.hidden = true; action.fn(); };
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms);
 }
 function showModal(html) { $('#modal').innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">${html}</div>`; $('#modal').hidden = false; }
-function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; renderList(); renderPanel(); }
+function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; if (state.merge && !state.merge.busy) state.merge = null; renderList(); renderPanel(); }
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' || e.target.closest('[data-close]')) closeModal(); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
@@ -1131,7 +1165,8 @@ function resetApp() {
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
-    rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' } });
+    rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
+    dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
   inqCache.clear(); state.sel.clear(); applyTheme(null);
   $('#search').value = '';
   closeModal();
@@ -1163,6 +1198,7 @@ async function start(session) {
   state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
   renderMe(); renderFilters(); setChrome(true);
   loadPeople(myGen); loadAppts(); loadHits(); loadListings(); loadSyncFrom();
+  if (me.role === 'manager') loadDismissals(myGen);
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
   api.settings().then(r => { if (myGen === loadGen) state.agentTags = !!(r && r.agents_create_tags); }).catch(() => {});
   let back = ''; try { back = sessionStorage.getItem('loopin:hash') || ''; sessionStorage.removeItem('loopin:hash'); } catch (_) {}
@@ -1263,7 +1299,10 @@ function filtered() {
   const q = state.q.trim().toLowerCase();
   const qd = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';   // phone search only when the box holds just digits and punctuation
   const ucut = state.unc ? notContactedSince() : 0;
+  const D = state.dup ? dupInfo() : null;
   const out = all.filter(p => {
+    if (p.merged_into) return false;
+    if (D && !D.of.has(p.id)) return false;
     if (state.onlyIds && !state.onlyIds.has(p.id)) return false;
     if (state.agent && p.owner_id !== state.agent) return false;
     if (state.stage && p.stage_id !== +state.stage) return false;
@@ -1274,6 +1313,7 @@ function filtered() {
   });
   const k = state.sort.key === 'activity' ? '_a' : '_c', dir = state.sort.dir === 'asc' ? 1 : -1;
   out.sort((a, b) => (a[k] - b[k]) * dir || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (D) out.sort((a, b) => D.of.get(a.id) - D.of.get(b.id));   // the duplicates filter lists each group together (the sort above holds inside a group)
   return out;
 }
 const isContacted = (p) => pend.has(p.id) && 'contacted' in pend.get(p.id) ? pend.get(p.id).contacted : !!p.contacted_at;
@@ -1317,7 +1357,7 @@ function personCard(p) {
     <input type="checkbox" data-sel="${esc(p.id)}" ${state.sel.has(p.id) ? 'checked' : ''} aria-label="Select ${esc(p._name || 'this person')}">
     <div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>
     <div class="pc-main">
-      <div class="pc-top">${isContacted(p) ? '' : '<span class="dot" aria-label="Not contacted yet"></span>'}<span class="name">${esc(p._name || '(no name)')}</span></div>
+      <div class="pc-top">${isContacted(p) ? '' : '<span class="dot" aria-label="Not contacted yet"></span>'}<span class="name">${esc(p._name || '(no name)')}</span>${dupMark(p)}</div>
       <div class="sub">${esc(p.source)} · ${esc(rel(p.last_activity_at))}</div>
       ${state.zOn && p.zillow_account ? `<div class="sub" title="${esc(p.zillow_account)}">Zillow: ${esc(zLocal(p.zillow_account))}</div>` : ''}
       ${ph || em ? `<div class="pc-meta">${ph ? `<a class="maillink" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a>` : ''}${em ? `<a class="maillink pc-email" href="mailto:${esc(em.email)}">${esc(em.email)}</a>` : ''}</div>` : ''}
@@ -1327,9 +1367,9 @@ function personCard(p) {
 function rowHtml(p) {
   const ph = (p.person_phones || [])[0], em = bestEmail(p);
   const sel = state.sel.has(p.id);
-  return `<tr data-open="${esc(p.id)}" class="${isContacted(p) ? '' : 'unread'} ${sel ? 'sel' : ''}">
+  return `<tr data-open="${esc(p.id)}" class="${isContacted(p) ? '' : 'unread'} ${sel ? 'sel' : ''}${state.dup ? ' grp' + (dupGroupOf(p.id) % 2) : ''}">
     <td class="c-check"><input type="checkbox" data-sel="${esc(p.id)}" ${sel ? 'checked' : ''} aria-label="Select ${esc(p._name || 'this person')}"></td>
-    <td class="c-name"><div class="who"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span><div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div><div style="min-width:0"><div class="name">${esc(p._name || '(no name)')}</div></div></div></td>
+    <td class="c-name"><div class="who"><span class="dot ${isContacted(p) ? 'off' : ''}" aria-hidden="true"></span><div class="avatar" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div><div style="min-width:0"><div class="name">${esc(p._name || '(no name)')}</div>${dupMark(p)}</div></div></td>
     <td>${contactedBox(p, true)}</td>
     <td>${ownerChip(p)}</td>
     <td>${ph ? `<a class="maillink num" href="${esc(telHref(ph.phone))}">${esc(fmtPhone(ph.phone))}</a>` : '<span class="sub">none yet</span>'}</td>
@@ -1346,7 +1386,7 @@ function renderList() {
   if (state.view === 'dash') { renderDash(); return; }
   if (state.view === 'calendar') { renderCal(); return; }
   if (state.view === 'renewals' || state.view === 'settings') return;
-  syncZFilter();
+  syncZFilter(); renderDupChrome();
   const list = filtered(), n = list.length;
   $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
   for (const [id, key] of [['#thCreated', 'created'], ['#thActivity', 'activity']]) {
@@ -1371,6 +1411,7 @@ $('#fAgent').addEventListener('change', e => { state.agent = e.target.value; res
 $('#fZ').addEventListener('change', e => { state.zacct = e.target.value; resetPaging(); });
 $('#fStage').addEventListener('change', e => { state.stage = e.target.value; resetPaging(); });
 $('#fUnc').addEventListener('click', () => { state.unc = !state.unc; $('#fUnc').setAttribute('aria-pressed', String(state.unc)); resetPaging(); });
+$('#fDup').addEventListener('click', () => { state.dup = !state.dup; renderDupChrome(); resetPaging(); });
 $('#moreBtn').addEventListener('click', () => { state.limit += SHOW; renderList(); });
 document.querySelector('thead').addEventListener('click', e => {
   const b = e.target.closest('[data-sort]'); if (!b) return;
@@ -1425,7 +1466,7 @@ function renderBulk() {
       html += `<div class="bulkrow"><b class="num" id="bulkCount">${n.toLocaleString('en-US')} selected</b>
         <select class="btn small" id="bulkStage" aria-label="Change stage"><option value="">Change stage…</option>${state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
         <button class="btn small" id="bulkOn">Mark contacted</button><button class="btn small" id="bulkOff">Mark not contacted</button>
-        ${canExport() ? '<button class="btn small" id="bulkExport">Export CSV</button>' : ''}<button class="btn small" id="bulkClear">Clear</button>
+        ${canExport() ? '<button class="btn small" id="bulkExport">Export CSV</button>' : ''}${isMgr() && state.dupOn && n >= 2 ? '<button class="btn small" id="bulkMerge">Merge</button>' : ''}<button class="btn small" id="bulkClear">Clear</button>
         ${allShown && n < matchN ? `<button class="btn small soft" id="selAll">Select all ${matchN.toLocaleString('en-US')} people that match</button>` : ''}</div>
         <div class="sub" id="bulkInfo">${ro === 0 ? `All ${ed.toLocaleString('en-US')} can change.` : `${ed.toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')} can change. ${ro.toLocaleString('en-US')} ${ro === 1 ? 'is an agent\'s lead' : 'are agents\' leads'} (read-only while FUB is their source).`}</div>`;
     }
@@ -1524,6 +1565,7 @@ $('#bulkbar').addEventListener('click', e => {
   if (t.id === 'selAll') selectAllMatching();
   else if (t.id === 'bulkClear') { state.sel.clear(); syncSel(); }
   else if (t.id === 'bulkExport') exportPeople((state.list || []).filter(p => state.sel.has(p.id)));
+  else if (t.id === 'bulkMerge') openMerge([...state.sel]);
   else if (t.id === 'bulkOn') askBulk(planFor('contact', true));
   else if (t.id === 'bulkOff') askBulk(planFor('contact', false));
   else if (t.id === 'bulkRetry') continueBulk();
@@ -1722,6 +1764,7 @@ async function showPanel(id) {
   loadLeadAppts(id);
   try {
     const d = await api.person(id);
+    d.merges = isMgr() && state.dupOn ? await api.mergeLogs(id).catch(() => []) : [];
     if (state.open !== id) return;
     state.detail = d;
     if (d.inquiries && d.inquiries[0] && d.inquiries[0].listing_address) inqCache.set(id, d.inquiries[0].listing_address);
@@ -1739,7 +1782,7 @@ function noteHtml(n, p) {
   const who = n.author_id ? (memberName(n.author_id) || 'Team member') : kind === 'calendly' ? 'Calendar sync' : 'FUB';
   const can = p && canEdit(p) && canEditNote(n), dis = p && busy.has(p.id) ? 'disabled' : '';
   if (can && state.edit === 'note:' + n.id) return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}</div>${editbox(`<textarea id="eNote" aria-label="Edit note">${esc(n.body)}</textarea>`, dis)}</div>`;
-  return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}${can ? ` <span class="spacer"></span><button class="pen" data-edit="note:${esc(n.id)}" aria-label="Edit note" ${dis}>${penSvg}</button><button class="pen" data-del="note" data-id="${esc(n.id)}" aria-label="Delete note" ${dis}>×</button>` : ''}</div><pre>${esc(n.body)}</pre></div>`;
+  return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}${can ? ` <span class="spacer"></span><button class="pen" data-edit="note:${esc(n.id)}" aria-label="Edit note" ${dis}>${penSvg}</button><button class="pen" data-del="note" data-id="${esc(n.id)}" aria-label="Delete note" ${dis}>×</button>` : ''}</div><pre>${esc(n.body)}</pre>${mergeUndoBtn(n)}</div>`;
 }
 function fieldValue(f, v) {
   if (isBlank(v) && v !== false) return '<span class="sub">—</span>';
@@ -1810,7 +1853,7 @@ function renderPanel() {
       <div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>
       <span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>
     </div>
-    <div class="panel-body">${canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`}${contact}${details}
+    <div class="panel-body">${canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`}${dupBanner(p)}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
@@ -1937,6 +1980,9 @@ $('#panel').addEventListener('click', e => {
   const dl = t.closest('[data-del]'); if (dl) { if (!dl.disabled) askDelete(dl.dataset.del, dl.dataset.id); return; }
   const tr = t.closest('[data-tagrm]'); if (tr) { if (!tr.disabled) removeTag(tr.dataset.tagrm); return; }
   if (t.closest('[data-tagadd]')) addTag();
+  if (t.closest('#dupReview')) { const D = dupInfo(), gi = D.of.get(state.open); if (gi !== undefined) openMerge(D.groups[gi].map(x => x.id)); return; }
+  if (t.closest('#dupNot')) { dismissGroup(state.open); return; }
+  const um = t.closest('[data-undomerge]'); if (um) { if (!um.disabled) askUndoMerge(um.dataset.undomerge); }
 });
 $('#panel').addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.shiftKey) return;
@@ -1964,6 +2010,216 @@ async function saveNote() {
     toast(e.message || 'The note was not saved.');
   }
 }
+
+// ───────── Possible duplicates and merge (v2.3; managers only; needs supabase/12) ─────────
+// Two leads are a possible duplicate when they share a phone number, or have the same full name and were created
+// within 30 days of each other. Detection runs here, over the people already loaded. Trash, merged and dismissed
+// pairs are left out. The result is GROUPS (leads linked to each other), not pairs.
+// A bucket of more than 20 leads on one phone or name is a placeholder value, not a person, so it is not flagged.
+const DUP_DAYS = 30, DUP_BUCKET = 20, MERGE_MAX = 10;
+const dkey = (a, b) => { a = String(a).toLowerCase(); b = String(b).toLowerCase(); return a < b ? a + '|' + b : b + '|' + a; };   // a < b, as the table's check wants
+const normName = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+const DUP_NONE = { ver: -1, groups: [], of: new Map() };
+let dupMemo = null;
+function dupInfo() {
+  if (!state.dupOn || !isMgr()) return DUP_NONE;
+  if (dupMemo && dupMemo.ver === state.dupVer) return dupMemo;
+  const parent = new Map();
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const union = (a, b) => { if (!parent.has(a)) parent.set(a, a); if (!parent.has(b)) parent.set(b, b); const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+  const names = new Map(), phones = new Map();
+  const add = (m, k, p) => { const l = m.get(k); if (l) l.push(p); else m.set(k, [p]); };
+  for (const p of all) {
+    if (p.merged_into) continue;
+    const st = stageOf(p); if (st && st.name === 'Trash') continue;
+    if (normName(p.last_name)) add(names, normName(p.first_name + ' ' + p.last_name), p);
+    const seen = new Set();
+    for (const ph of p.person_phones || []) { const d = String(ph.phone || '').replace(/\D/g, ''); if (d && !seen.has(d)) { seen.add(d); add(phones, d, p); } }
+  }
+  const link = (list, near) => {
+    if (list.length < 2 || list.length > DUP_BUCKET) return;
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      if (near && Math.abs(a._c - b._c) > DUP_DAYS * 864e5) continue;
+      if (state.dismissed.has(dkey(a.id, b.id))) continue;
+      union(a.id, b.id);
+    }
+  };
+  names.forEach(l => link(l, true)); phones.forEach(l => link(l, false));
+  const roots = new Map();
+  for (const id of parent.keys()) { const r = find(id); if (roots.has(r)) roots.get(r).push(byId.get(id)); else roots.set(r, [byId.get(id)]); }
+  const groups = [...roots.values()].filter(g => g.length >= 2);
+  groups.forEach(g => g.sort((a, b) => (b._a - a._a) || (a.id < b.id ? -1 : 1)));
+  const newest = (g) => Math.max(...g.map(x => x._c));
+  groups.sort((a, b) => (newest(b) - newest(a)) || (a[0].id < b[0].id ? -1 : 1));
+  const of = new Map(); groups.forEach((g, i) => g.forEach(x => of.set(x.id, i)));
+  return dupMemo = { ver: state.dupVer, groups, of };
+}
+const dupGroupOf = (id) => dupInfo().of.get(id) || 0;
+const dupMark = (p) => dupInfo().of.has(p.id) ? '<span class="pill warn dupmark" title="Possible duplicate. Open the lead to review.">Duplicate?</span>' : '';
+function renderDupChrome() {
+  const b = $('#fDup'), n = dupInfo().groups.length;
+  if (state.dup && !n) state.dup = false;
+  b.hidden = !(state.dupOn && isMgr() && n > 0);
+  b.setAttribute('aria-pressed', String(state.dup));
+  b.textContent = `Possible duplicates (${plural(n, 'group', 'groups')})`;
+}
+async function loadDismissals(gen) {
+  try {
+    const rows = await api.duplicateDismissals();
+    if (gen !== loadGen) return;
+    state.dismissed = new Set(rows.map(r => dkey(r.a, r.b)));
+    state.dupOn = true;
+  } catch (_) {
+    if (gen !== loadGen) return;
+    state.dupOn = false;   // supabase/12 is not installed (or the read failed): the feature stays hidden
+  }
+  state.dupVer++; renderList(); renderPanel();
+}
+function dupBanner(p) {
+  const D = dupInfo(), gi = D.of.get(p.id);
+  if (gi === undefined) return '';
+  const others = D.groups[gi].filter(x => x.id !== p.id);
+  const line = (x, first) => `<div>${first ? '<b>Possible duplicate:</b> ' : ''}also <b>${esc(x._name || '(no name)')}</b> · ${esc(x.owner_id ? (memberName(x.owner_id) || 'Team member') : 'Unassigned')} · ${esc(fmtShort(x.created_at))}</div>`;
+  return `<div class="dupe" id="dupBanner">${others.slice(0, 4).map((x, i) => line(x, i === 0)).join('')}${others.length > 4 ? `<div class="sub">and ${plural(others.length - 4, 'more', 'more')}</div>` : ''}
+    <div class="row"><button class="btn small primary" id="dupReview">Review merge</button><button class="btn small" id="dupNot" ${state.dupBusy ? 'disabled' : ''}>Not the same person</button></div></div>`;
+}
+// "Not the same person" writes a dismissal for each pair this lead forms with the others in its group.
+async function dismissGroup(id) {
+  if (state.dupBusy || !isMgr()) return;
+  const D = dupInfo(), gi = D.of.get(id); if (gi === undefined) return;
+  const others = D.groups[gi].filter(x => x.id !== id);
+  state.dupBusy = true; renderPanel();
+  let n = 0, err = '';
+  for (const o of others) {
+    const k = dkey(id, o.id); if (state.dismissed.has(k)) continue;
+    const [a, b] = k.split('|');
+    try { await api.dismissDuplicate(a, b); state.dismissed.add(k); n++; } catch (e) { err = e.message || 'The change was not saved.'; break; }
+  }
+  state.dupBusy = false; state.dupVer++; refresh();
+  toast(err ? `Saved ${n} of ${others.length}. Stopped: ${err}` : 'Marked as different people.');
+}
+
+// The merge dialog. Ricky picks the lead to keep; the others are merged into it one at a time.
+const isAgentOwned = (p) => { const m = state.teamMap.get(p.owner_id); return !!m && m.role === 'agent'; };
+// Default keeper: a lead owned by an agent beats one owned by a manager (or nobody); then the most recent activity.
+function defaultKeeper(ppl) {
+  const pool = ppl.some(isAgentOwned) ? ppl.filter(isAgentOwned) : ppl;
+  return pool.slice().sort((a, b) => (b._a - a._a) || (b._c - a._c) || (a.id < b.id ? -1 : 1))[0];
+}
+function openMerge(ids) {
+  if (!isMgr() || !state.dupOn) return;
+  const ppl = [...new Set(ids)].map(id => byId.get(id)).filter(p => p && !p.merged_into);
+  if (ppl.length < 2) { toast('Pick at least two leads to merge.'); return; }
+  if (ppl.length > MERGE_MAX) { toast(`Merge ${MERGE_MAX} leads or fewer at a time.`); return; }
+  const M = state.merge = { ids: ppl.map(p => p.id), keep: defaultKeeper(ppl).id, busy: false, err: '', prog: '', counts: new Map() };
+  const rows = M.ids.map(id => byId.get(id)).map(p => {
+    const st = stageOf(p);
+    return `<label class="mrow"><input type="radio" name="mkeep" value="${esc(p.id)}" ${M.keep === p.id ? 'checked' : ''}>
+      <span class="mmain"><span class="name">${esc(p._name || '(no name)')}${M.keep === p.id ? ' <span class="pill info" data-suggest="1">Suggested</span>' : ''}</span>
+      <span class="sub">${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')} · ${esc(st ? st.name : '')} · Created ${esc(fmtShort(p.created_at))} · Last activity ${esc(rel(p.last_activity_at))}</span>
+      <span class="sub" data-cnt="${esc(p.id)}"></span></span></label>`;
+  }).join('');
+  showModal(`<h3>Merge ${plural(ppl.length, 'lead', 'leads')}</h3>
+    <p style="margin:0;color:var(--ink-2)">Pick the lead to keep. The others are hidden, and their emails, phones, notes, inquiries and showings move to it. Blank fields on the kept lead are filled from the others. You can undo this.</p>
+    <div class="mlist" id="mergeList">${rows}</div>
+    <div class="sub" id="mergeMoves"></div>
+    <div class="err-s" id="mergeErr"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close id="mergeCancel">Cancel</button><button class="btn primary" id="mergeGo"></button></div>`);
+  updateMerge(); loadMergeCounts(M);
+}
+async function loadMergeCounts(M) {
+  await Promise.all(M.ids.map(async id => {
+    try {
+      const [d, a] = await Promise.all([api.person(id), api.leadAppointments(id)]);
+      M.counts.set(id, { notes: d.notes.length, inq: d.inquiries.length, show: a.length });
+    } catch (_) { M.counts.set(id, null); }
+  }));
+  if (state.merge === M) updateMerge();
+}
+const cntLine = (p, c) => [plural((p.person_emails || []).length, 'email', 'emails'), plural((p.person_phones || []).length, 'phone', 'phones')]
+  .concat(c ? [plural(c.notes, 'note', 'notes'), plural(c.inq, 'inquiry', 'inquiries'), plural(c.show, 'showing', 'showings')] : [c === null ? 'counts unavailable' : 'counting…']).join(' · ');
+function updateMerge() {
+  const M = state.merge; if (!M || $('#modal').hidden) return;
+  const keep = byId.get(M.keep), others = M.ids.filter(i => i !== M.keep).map(i => byId.get(i));
+  for (const id of M.ids) { const el = $('#modal').querySelector(`[data-cnt="${CSS.escape(id)}"]`); if (el) el.textContent = cntLine(byId.get(id), M.counts.get(id)); }
+  $('#modal').querySelectorAll('[data-suggest]').forEach(x => { x.hidden = x.closest('.mrow').querySelector('input').value !== M.keep; });
+  const em = new Set((keep.person_emails || []).map(x => x.email)), ph = new Set((keep.person_phones || []).map(x => x.phone));
+  const em2 = new Set(), ph2 = new Set();
+  for (const o of others) { (o.person_emails || []).forEach(x => { if (!em.has(x.email)) em2.add(x.email); }); (o.person_phones || []).forEach(x => { if (!ph.has(x.phone)) ph2.add(x.phone); }); }
+  const cs = others.map(o => M.counts.get(o.id)), known = cs.every(Boolean);
+  const sum = (k) => cs.reduce((n, c) => n + (c ? c[k] : 0), 0);
+  $('#mergeMoves').textContent = `Moves to ${keep._name || '(no name)'}: ${plural(em2.size, 'new email', 'new emails')}, ${plural(ph2.size, 'new phone', 'new phones')}`
+    + (known ? `, ${plural(sum('notes'), 'note', 'notes')}, ${plural(sum('inq'), 'inquiry', 'inquiries')}, ${plural(sum('show'), 'showing', 'showings')}.` : ', and notes, inquiries and showings (counting…).');
+  $('#mergeErr').textContent = M.err;
+  const go = $('#mergeGo'); go.disabled = M.busy; go.textContent = M.busy ? M.prog : `Merge into ${keep._name || '(no name)'}`;
+  $('#mergeCancel').disabled = M.busy;
+  $('#modal').querySelectorAll('input[name="mkeep"]').forEach(r => { r.disabled = M.busy; });
+}
+async function runMerge() {
+  const M = state.merge; if (!M || M.busy) return;
+  const gen = loadGen, keepId = M.keep, others = M.ids.filter(i => i !== keepId), logs = [], done = [];
+  M.busy = true; M.err = '';
+  for (let i = 0; i < others.length; i++) {
+    M.prog = `Merging ${i + 1} of ${others.length}…`; updateMerge();
+    try { logs.push(await api.mergePeople(keepId, others[i])); done.push(others[i]); }
+    catch (e) { M.err = e.message || 'The merge failed.'; break; }
+    if (gen !== loadGen) return;
+  }
+  M.busy = false;
+  done.forEach(dropRow);
+  try { const r = await api.row(keepId); if (r) setRow(r); } catch (_) { /* the list keeps the row it has */ }
+  if (gen !== loadGen) return;
+  const keep = byId.get(keepId), name = keep ? keep._name || '(no name)' : 'the kept lead';
+  const undo = done.length ? { label: 'Undo', fn: () => undoMerges(logs, keepId, done) } : null;
+  if (M.err && !done.length) { updateMerge(); return; }   // nothing merged: stay in the dialog with the error
+  state.merge = null; $('#modal').hidden = true; $('#modal').innerHTML = '';
+  state.sel.clear();
+  if (state.open && done.includes(state.open)) openPanel(keepId); else if (state.open === keepId) refreshDetail(keepId);
+  renderList(); renderPanel();
+  toast(M.err ? `Merged ${done.length} of ${others.length} into ${name}. Stopped: ${M.err}` : `Merged ${plural(done.length, 'lead', 'leads')} into ${name}.`, 15000, undo);
+}
+// Undo a batch of merges, newest first, then read both sides again.
+async function undoMerges(logs, survivorId, mergedIds) {
+  const gen = loadGen;
+  let done = 0, err = '';
+  for (let i = logs.length - 1; i >= 0; i--) {
+    try { await api.unmergePeople(logs[i]); done++; } catch (e) { err = e.message || 'The merge was not undone.'; break; }
+    if (gen !== loadGen) return;
+  }
+  for (const id of mergedIds) {
+    try { const r = await api.row(id); if (r && !r.merged_into) setRow(r); } catch (_) { /* shown after the next reload */ }
+  }
+  try { const r = await api.row(survivorId); if (r) setRow(r); } catch (_) { /* the list keeps the row it has */ }
+  if (gen !== loadGen) return;
+  await refreshDetail(survivorId);
+  refresh();
+  toast(err ? `Undid ${done} of ${logs.length}. Stopped: ${err}` : logs.length === 1 ? 'Merge undone.' : `Undid ${plural(done, 'merge', 'merges')}.`);
+}
+// Read the open lead's notes, inquiries, merges and showings again (after a merge or an undo).
+async function refreshDetail(id) {
+  if (state.open !== id) return;
+  try {
+    const d = await api.person(id);
+    d.merges = isMgr() && state.dupOn ? await api.mergeLogs(id).catch(() => []) : [];
+    if (state.open !== id) return;
+    state.detail = d; state.detailErr = '';
+  } catch (e) { if (state.open === id) state.detailErr = e.message; }
+  renderPanel(); loadLeadAppts(id);
+}
+const mergeUndoBtn = (n) => {
+  const lg = isMgr() && state.detail && (state.detail.merges || []).find(x => x.note_id === n.id);
+  return lg ? `<div class="row"><button class="btn small" data-undomerge="${esc(lg.id)}">Undo merge</button></div>` : '';
+};
+function askUndoMerge(logId) {
+  const p = byId.get(state.open), lg = state.detail && (state.detail.merges || []).find(x => x.id === logId);
+  if (!p || !lg) return;
+  showModal(`<h3 id="umText">Undo this merge?</h3><p style="margin:0;color:var(--ink-2)">The merged lead comes back as its own lead. Its emails, phones, notes, inquiries and showings move back to it. Anything added to ${esc(p._name || 'this lead')} since the merge stays on ${esc(p._name || 'this lead')}.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="umGo">Undo merge</button></div>`);
+  $('#umGo').onclick = async () => { closeModal(); await undoMerges([lg.id], p.id, [lg.merged_id]); };
+}
+$('#modal').addEventListener('click', e => { if (e.target.closest('#mergeGo')) runMerge(); });
+$('#modal').addEventListener('change', e => { if (e.target.name === 'mkeep' && state.merge && !state.merge.busy) { state.merge.keep = e.target.value; updateMerge(); } });
 
 // ───────── Dashboard ─────────
 // "Today" and "this week" use the browser's local date. Never toISOString() for a local date.
@@ -2767,7 +3023,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
