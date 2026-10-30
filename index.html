@@ -419,6 +419,9 @@ textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--
 .custcard { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; text-align: left; padding: 18px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--btn-shadow); color: var(--ink); }
 .custcard:hover { border-color: var(--accent); } .custcard .ci { font-size: 22px; } .custcard b { font-size: 17px; } .custcard span:last-child { grid-column: 1 / -1; color: var(--ink-2); font-size: 13.5px; }
 .settings.subpage { grid-template-columns: minmax(0, 1fr); max-width: 900px; }
+/* Settings reads best as a centered column, not the full window (Greg 2026-10-30). The Team table keeps more room. */
+#view-settings { max-width: 960px; margin-inline: auto; }
+#view-settings:has(.teamtbl) { max-width: 1200px; }
 .settings.subpage:has(.teamtbl) { max-width: 1200px; }
 .teamtbl td:nth-child(4) { width: 260px; } .teamtbl td:nth-child(4) div { overflow-wrap: anywhere; }
 .teamtbl td:nth-child(4) > span, .teamtbl td:nth-child(4) > .lnkbtn { display: block; margin-top: 3px; line-height: 1.35; } .teamtbl td:nth-child(4) > .lnkbtn { padding: 0; }
@@ -523,17 +526,26 @@ tr.unread .name { font-weight: 700; }
 .appt .time { min-width: 92px; line-height: 1.3; }  /* every Coming up row, linked or not, so the columns line up */
 .bars { display: grid; gap: 8px; padding: 12px 16px; }
 .bar { display: grid; grid-template-columns: 120px minmax(0, 1fr) 28px; gap: 8px; align-items: center; font-size: 13px; }
-.bd .bdfigs { display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 16px 4px; }
-.bd .bdfig { display: grid; gap: 1px; min-width: 92px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.bd .bdtop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.bd .bdtop h1 { font-size: 20px; margin: 0; }
+.bd .bdfigs { display: flex; gap: 10px; flex-wrap: wrap; padding-bottom: 4px; }
+.bd .bdfig { display: grid; gap: 1px; min-width: 92px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .bd .bdfig b { font-size: 20px; font-variant-numeric: tabular-nums; } .bd .bdfig.main b { font-size: 28px; }
 .bd .bdfig span { font-size: 12.5px; color: var(--ink-3); }
-.bd .bdnote { margin: 8px 16px 0; }
-.bd .bdgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 18px; padding: 12px 16px 16px; }
-.bd .bdbox h3 { font-size: 13px; margin: 0 0 6px; color: var(--ink-2); }
-.bd .bdtbl td { padding: 3px 6px 3px 0; border: 0; } .bd .bdtbl td:first-child { white-space: normal; overflow-wrap: anywhere; }
-.bd .track { display: inline-block; width: 70px; height: 8px; vertical-align: middle; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.bd .bdnote { margin: 8px 0 0; }
+.bd .bdgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-top: 12px; align-items: start; }
+@media (min-width: 1280px) { .bd .bdgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .bd .bdgrid { grid-template-columns: minmax(0, 1fr); } }
+.bd .bdbox > h3 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.bd .bdtbl th { font-size: 12px; padding: 7px 12px; } .bd .bdtbl th.num, .bd .bdtbl td.num { text-align: right; }
+.bd .bdtbl td { padding: 7px 12px; white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.bd .bdtbl tr:last-child td { border-bottom: 0; }
+.bd .bdtbl tbody tr:nth-child(even) td { background: var(--surface-2); }
+.bd .bdtbl tbody tr:hover td { background: var(--accent-soft); }
+.bd .cnt { text-align: right; margin-left: 0; }
+.bd .track { display: block; width: 100%; min-width: 48px; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .bd .fill { display: block; height: 100%; background: var(--accent); }
-.bd > h2 select, .bd > h2 input[type=date] { font: inherit; font-size: 13px; font-weight: 400; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.bd .bdtop select, .bd .bdtop input[type=date] { font: inherit; font-size: 13px; font-weight: 400; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .arearow input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: inherit; min-width: 130px; }
 .bar .track { background: var(--surface-2); border-radius: 4px; height: 10px; overflow: hidden; } .bar .fill { display: block; background: var(--accent); height: 100%; border-radius: 4px; }
 .dash-head .spacer { flex: 1; }
@@ -609,7 +621,7 @@ tr.unread .name { font-weight: 700; }
   .topsearch { flex: 1 1 auto; order: 0; flex-basis: auto; padding: 7px 12px; }
   .topbar > .spacer { display: none; }
   .viewas select { max-width: 112px; padding: 5px 4px; font-size: 12px; }
-  .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0;
+  .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0;
     background: var(--top); border-top: 1px solid rgba(255,255,255,.12); padding-bottom: env(safe-area-inset-bottom, 0px);
     padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
   .nav button { border-radius: 0; padding: 10px 2px 11px; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
@@ -787,6 +799,7 @@ html.leadfull .scrim { display: none; }
     <button data-view="dash" aria-current="page">Dashboard</button>
     <button data-view="calendar">Calendar</button>
     <button data-view="people">People</button>
+    <button data-view="breakdown">Breakdown</button>
     <button data-view="renewals" id="navRenew" hidden>Renewals<span class="count" id="renewCount"></span></button>
     <button data-view="settings" id="navSettings" hidden>Settings</button>
   </nav>
@@ -799,6 +812,8 @@ html.leadfull .scrim { display: none; }
   <section id="view-auth" hidden></section>
 
   <section class="view" id="view-dash" hidden><div id="dash"></div></section>
+
+  <section class="view" id="view-breakdown" hidden><div id="breakdown"></div></section>
 
   <section class="view" id="view-calendar" hidden>
     <div class="cal-head"><h1 id="calTitle"></h1>
@@ -1145,7 +1160,7 @@ const byId = new Map();       // id -> person
 const busy = new Set();       // ids with a write in flight
 const pend = new Map();       // id -> what the user just asked for, shown until the database answers
 let loadGen = 0;              // changes on sign-out so late pages are dropped
-// v2.8 Lead breakdown and area rules (managers only; see "Lead breakdown" below). One object, rebuilt on sign-out.
+// v2.8 Lead breakdown and area rules (see "Lead breakdown" below). One object, rebuilt on sign-out.
 const newBR = () => ({ rules: [], rulesLoaded: false, firsts: new Map(), firstsLoaded: false, loading: false, err: '', ver: 0, preset: '7d', from: '', to: '', idx: null });
 let BR = newBR();
 const needsBR = () => state.filters.some(f => f.key === 'area' || f.key === 'beds');
@@ -1213,7 +1228,7 @@ document.addEventListener('keydown', e => {
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
   $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
-  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-renew').hidden = true; $('#view-calendar').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
+  if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-breakdown').hidden = true; $('#view-renew').hidden = true; $('#view-calendar').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
@@ -1280,7 +1295,7 @@ async function start(session) {
     state.fields = fields;
   } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   state.loading = true;
-  state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
+  state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#breakdown' ? 'breakdown' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
   state.colOwn = parseCols(me.people_columns);
   renderMe(); renderFilters(); setChrome(true);
   api.allStages().then(r => { if (myGen === loadGen && r) { state.allStageRows = r; if (state.view === 'people') renderList(); } }).catch(() => {});   // falls back to the active stages
@@ -1362,7 +1377,7 @@ async function refreshPeople() {
   } catch (_) { /* the next refresh tries again from the same point */ }
   finally { if (gen === loadGen) state.refreshing = false; }
   if (!n || gen !== loadGen) return;
-  if (state.view === 'people') renderList(); else if (state.view === 'dash') renderDash();
+  if (state.view === 'people') renderList(); else if (state.view === 'dash') renderDash(); else if (state.view === 'breakdown') bdRender();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshPeople(); });
 setInterval(() => { if (!document.hidden) refreshPeople(); }, 60000);
@@ -1436,9 +1451,9 @@ const FBUILT = {
   contacted: { label: 'Contacted', type: 'yesno', get: (p) => !!p.contacted_at },
   phone: { label: 'Has a phone', type: 'yesno', get: (p) => (p.person_phones || []).length > 0 },
   zacct: { label: 'Zillow account', type: 'choice', z: true, get: (p) => p.zillow_account ? [p.zillow_account] : [] },
-  // v2.8: from the lead's first inquiry (see "Lead breakdown"). Managers only. Empty until that data has loaded; People waits for it before it shows a count.
-  area: { label: 'Area', type: 'choice', mgr: true, get: (p) => BR.firstsLoaded ? [brArea(p.id)] : [] },
-  beds: { label: 'Bedrooms', type: 'choice', mgr: true, get: (p) => BR.firstsLoaded ? [brBeds(p.id)] : [] },
+  // v2.8: from the lead's first inquiry (see "Lead breakdown"). Empty until that data has loaded; People waits for it before it shows a count.
+  area: { label: 'Area', type: 'choice', get: (p) => BR.firstsLoaded ? [brArea(p.id)] : [] },
+  beds: { label: 'Bedrooms', type: 'choice', get: (p) => BR.firstsLoaded ? [brBeds(p.id)] : [] },
 };
 function fdef(key) {
   key = String(key || '');
@@ -1907,6 +1922,7 @@ function renderList() {
   if (!state.me) return;
   if (state.view === 'dash') { renderDash(); return; }
   if (state.view === 'calendar') { renderCal(); return; }
+  if (state.view === 'breakdown') { bdRender(); return; }
   if (state.view === 'renewals' || state.view === 'settings') return;
   syncZFilter(); renderDupChrome(); syncQuick();
   const cols = effCols(), list = filtered(), n = list.length, l = curList();
@@ -2400,7 +2416,7 @@ function route() {
     state.full = full; showPanel(id); return;
   }
   if (state.open) hidePanel();
-  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#calendar' ? 'calendar' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
+  state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#calendar' ? 'calendar' : h === '#breakdown' ? 'breakdown' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
   applyView();
 }
 function go(view) {
@@ -2414,10 +2430,11 @@ function applyView() {
   if (state.view === 'renewals' && !(state.me.role === 'manager' && state.rOn)) state.view = 'dash';
   if (state.view === 'settings' && state.me.role !== 'manager') state.view = 'dash';
   const v = state.view;
-  $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings'; $('#view-calendar').hidden = v !== 'calendar';
+  $('#view-dash').hidden = v !== 'dash'; $('#view-breakdown').hidden = v !== 'breakdown'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings'; $('#view-calendar').hidden = v !== 'calendar';
   document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
   renewChrome(); syncFixed();
-  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); loadBreakdown(); }
+  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); }
+  else if (v === 'breakdown') { bdRender(); loadBreakdown(); }
   else if (v === 'calendar') loadCal();
   else if (v === 'settings') openSettings();
   else if (v === 'renewals') { if (Date.now() - state.renew.at > 300000) loadListings(); renderRenew(); }
@@ -2615,7 +2632,7 @@ function renderPanel() {
       feed = `<div class="section feed" id="feed"><div class="ftabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-feed="${k}" aria-selected="${ft === k}">${l} <span class="num">${cnt(k)}</span></button>`).join('')}</div>${body}</div>`;
     }
     const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
-    const label = state.navLabel || (state.view === 'dash' ? 'Dashboard' : state.view === 'calendar' ? 'Calendar' : 'People');
+    const label = state.navLabel || (state.view === 'dash' ? 'Dashboard' : state.view === 'calendar' ? 'Calendar' : state.view === 'breakdown' ? 'Breakdown' : 'People');
     const navCard = `<div class="section navcard" id="stepper"><div class="row" style="justify-content:space-between;flex-wrap:nowrap">${i >= 0 ? `<button class="btn small" data-step="-1" aria-label="Previous person" ${i === 0 ? 'disabled' : ''}>‹</button><b class="num" id="stepText">Person ${(i + 1).toLocaleString('en-US')} of ${ids.length.toLocaleString('en-US')}</b><button class="btn small" data-step="1" aria-label="Next person" ${i === ids.length - 1 ? 'disabled' : ''}>›</button>` : '<span class="sub">Not in a list</span>'}</div>
       <div class="row"><button class="btn small" id="closePanel">← ${esc(label)}</button><button class="btn small soft" id="pFull">Open as side panel</button></div></div>`;
     const collab = !d ? loadOrErr : (d.collaborators || []).map(c => `<div class="vrow">${avatar(c.member_id, 'sm')}<span class="val">${esc(memberName(c.member_id) || 'Team member')}</span></div>`).join('') || '<div class="sub">None</div>';
@@ -3211,7 +3228,7 @@ function renderDash() {
   const look = `<section class="card" id="dash-look"><h2>Needs a look</h2>
     ${due.map(({ p, d, days }) => `<div class="li"><span class="dot off" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">Moves in ${esc(fmtMonthDay(d))}, ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}. Reach back out.</div></div><span class="sub">${who(p.owner_id)}</span></div>`).join('') || '<div class="empty-s">All clear.</div>'}</section>`;
 
-  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>` + breakdownHtml();
+  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>`;
 }
 
 // ───────── Lead breakdown and area rules (v2.8, supabase/15) ─────────
@@ -3259,9 +3276,9 @@ const brBeds = (id) => { const f = BR.firsts.get(id); return f ? f.bed : 'Unknow
 const areaNames = () => [...new Set(BR.rules.map(r => r.area))].sort((a, b) => a.localeCompare(b));
 // Rules change: work out every lead's area again (the street and zip stay as they were).
 function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = areaOf(f.street, f.zip); BR.ver++; }
-// Rules and first inquiries load once per session, the first time a manager needs them (Dashboard, Settings > Areas, an Area or Bedrooms filter).
+// Rules and first inquiries load once per session, the first time someone needs them (Breakdown, Settings > Areas, an Area or Bedrooms filter).
 async function loadBreakdown(force) {
-  if (!isMgr() || BR.loading || (BR.firstsLoaded && BR.rulesLoaded && !force)) return;
+  if (!state.me || BR.loading || (BR.firstsLoaded && BR.rulesLoaded && !force)) return;
   const gen = loadGen; BR.loading = true; BR.err = ''; refreshBR();
   try {
     const rules = await api.areaRules(), firsts = new Map();
@@ -3282,7 +3299,7 @@ async function reloadRules() { const rules = await api.areaRules(); BR.rules = r
 // Show new data wherever it is on screen.
 function refreshBR() {
   if (!state.me) return;
-  if (state.view === 'dash') bdRender();
+  if (state.view === 'breakdown') bdRender();
   else if (state.view === 'people' && (needsBR() || state.showF)) { renderList(); if (state.showF) renderFPanel(); }
   else if (state.view === 'settings' && state.set.loaded) renderSettings();
 }
@@ -3295,17 +3312,19 @@ function bdFilter() {
   return { key: 'created', op: 'between', ...(dateKey(BR.from) ? { from: dateKey(BR.from) } : {}), ...(dateKey(BR.to) ? { to: dateKey(BR.to) } : {}) };
 }
 const bdWindow = () => fwindow(bdFilter());
-const BD_DIMS = [['agent', 'By agent'], ['source', 'By source'], ['zacct', 'By Zillow account'], ['area', 'By area'], ['beds', 'By bedrooms'], ['stage', 'By stage']];
+const BD_DIMS = [['agent', 'By agent'], ['source', 'By source'], ['zacct', 'By Zillow account'], ['area', 'By area'], ['beds', 'By bedrooms']];
+// An agent counts only the leads they own (the database also shows them leads they work on with someone else), and has no "By agent" table.
+const bdDims = () => BD_DIMS.filter(d => (d[0] !== 'agent' || isMgr()) && (d[0] !== 'zacct' || state.zOn));
 function bdCompute() {
   const [from, to] = bdWindow(), dims = Object.fromEntries(BD_DIMS.map(d => [d[0], new Map()]));
   const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
   let total = 0;
   for (const p of all) {
     const ck = p._ck;
-    if (p.merged_into || !ck || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
+    if (p.merged_into || !ck || (!isMgr() && p.owner_id !== state.me.id) || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
     total++;
     bump(dims.agent, p.owner_id || NO_AGENT); bump(dims.source, (p.source || '').trim()); bump(dims.zacct, p.zillow_account || '');
-    bump(dims.area, brArea(p.id)); bump(dims.beds, brBeds(p.id)); bump(dims.stage, p.stage_id == null ? '' : String(p.stage_id));
+    bump(dims.area, brArea(p.id)); bump(dims.beds, brBeds(p.id));
   }
   return { total, dims };
 }
@@ -3313,17 +3332,16 @@ function bdLabel(dim, v) {
   if (dim === 'agent') return v === NO_AGENT ? 'Unassigned' : (memberName(v) || 'A former member');
   if (dim === 'source') return v || 'No source';
   if (dim === 'zacct') return v ? zLocal(v) : 'No account';
-  if (dim === 'stage') { if (v === '') return 'No stage'; const s = state.stageMap.get(+v); return s ? s.name : 'A removed stage'; }
   return v;
 }
 function breakdownHtml() {
-  if (!isMgr()) return '';
-  const head = (extra = '') => `<h2>Lead breakdown${extra}</h2>`;
-  const wrap = (inner) => `<section class="card bd" id="dash-breakdown">${inner}</section>`;
+  const title = isMgr() ? 'Lead breakdown' : 'My lead breakdown';
+  const head = (extra = '') => `<div class="bdtop"><h1>${title}</h1>${extra}</div>`;
+  const wrap = (inner) => `<div class="bd" id="bd-main">${inner}</div>`;
   if (BR.err && !BR.firstsLoaded) return wrap(head() + `<div class="empty-s" id="bdErr">Could not load the lead breakdown: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></div>`);
   if (!BR.firstsLoaded) return wrap(head() + '<div class="empty-s" id="bdLoading">Loading…</div>');
   const { total, dims } = bdCompute(), fmt = (n) => n.toLocaleString('en-US');
-  const drafts = BR.rules.filter(r => r.draft).length;
+  const drafts = isMgr() ? BR.rules.filter(r => r.draft).length : 0;
   const ctl = `<span class="spacer"></span><select id="bdRange" aria-label="Date range">${BD_PRESETS.map(x => `<option value="${x[0]}" ${x[0] === BR.preset ? 'selected' : ''}>${x[1]}</option>`).join('')}</select>`
     + (BR.preset === 'custom' ? `<input type="date" id="bdFrom" value="${esc(BR.from)}" aria-label="From"><input type="date" id="bdTo" value="${esc(BR.to)}" aria-label="To">` : '')
     + `<button class="btn small" id="bdRefresh" ${BR.loading ? 'disabled' : ''}>Refresh</button>`;
@@ -3332,23 +3350,23 @@ function breakdownHtml() {
   const figs = `<div class="bdfigs"><div class="bdfig main"><b id="bdTotal">${fmt(total)}</b><span>New leads</span></div>${topSrc.map(r => `<div class="bdfig"><b>${fmt(r.n)}</b><span>${esc(r.label)}</span></div>`).join('')}</div>`;
   const table = (dim, title) => {
     const rows = rowsOf(dim);
-    return `<div class="bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
+    return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
       <td class="num"><button class="cnt num" data-bdrow="${dim}" data-bdval="${esc(r.v)}" tabindex="-1">${fmt(r.n)}</button></td><td class="num sub">${total ? Math.round(r.n / total * 100) : 0}%</td>
-      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>` : '<div class="empty-s">No new leads in this range.</div>'}</div>`;
+      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
-  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${BD_DIMS.filter(d => d[0] !== 'zacct' || state.zOn).map(d => table(d[0], d[1])).join('')}</div>`);
+  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div>`);
 }
-// Redraw only this section, so the rest of the Dashboard keeps its place.
-function bdRender() { const el = $('#dash-breakdown'); if (el) el.outerHTML = breakdownHtml(); else if (state.view === 'dash' && isMgr()) renderDash(); }
+// Redraw only this tab.
+function bdRender() { const el = $('#bd-main'); if (el) el.outerHTML = breakdownHtml(); else $('#breakdown').innerHTML = breakdownHtml(); }
 // A row click: People with this value and the same date range, so the list is exactly the leads that were counted.
 function bdGo(dim, val) {
   const f = [];
-  if (dim === 'stage') f.push(val === '' ? { key: 'stage', op: 'empty' } : { key: 'stage', op: 'any', vals: [+val] });
-  else if (dim === 'source' || dim === 'zacct') f.push(val === '' ? { key: dim, op: 'empty' } : { key: dim, op: 'any', vals: [val] });
+  if (dim === 'source' || dim === 'zacct') f.push(val === '' ? { key: dim, op: 'empty' } : { key: dim, op: 'any', vals: [val] });
   else f.push({ key: dim, op: 'any', vals: [val] });
   f.push(bdFilter());
+  if (!isMgr()) f.push({ key: 'agent', op: 'any', vals: [state.me.id] });   // the count is the agent's own leads, so the list is too
   peopleWith({ filters: f });
 }
 document.addEventListener('click', e => { if (e.target.closest('#brRetryP')) loadBreakdown(true); });
@@ -3370,9 +3388,6 @@ function peopleWith(o = {}) {
 $('#dash').addEventListener('click', e => {
   const t = e.target;
   if (t.closest('#dashRetry')) { retryLoad(); return; }
-  const bd = t.closest('[data-bdrow]'); if (bd) { bdGo(bd.dataset.bdrow, bd.dataset.bdval); return; }
-  if (t.closest('#bdRetry') || t.closest('#bdRefresh')) { loadBreakdown(true); return; }
-  if (t.closest('[data-bdareas]')) { goSetPage('areas'); go('settings'); return; }
   const g = t.closest('[data-go]');
   if (g) {
     const k = g.dataset.go;
@@ -3394,15 +3409,21 @@ $('#dash').addEventListener('click', e => {
     openPanel(o.dataset.openlead, leadPref() === 'full');
   }
 });
-$('#dash').addEventListener('change', e => {
+$('#dash').addEventListener('change', onChange);
+$('#breakdown').addEventListener('click', e => {
+  const t = e.target, bd = t.closest('[data-bdrow]');
+  if (bd) bdGo(bd.dataset.bdrow, bd.dataset.bdval);
+  else if (t.closest('#bdRetry') || t.closest('#bdRefresh')) loadBreakdown(true);
+  else if (t.closest('[data-bdareas]')) { goSetPage('areas'); go('settings'); }
+});
+$('#breakdown').addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'bdRange') {
     BR.preset = t.value;
     if (t.value === 'custom' && !BR.from && !BR.to) { BR.from = localKey(+dayStart(-6)); BR.to = localKey(+dayStart(0)); }
     bdRender(); return;
   }
-  if (t.id === 'bdFrom' || t.id === 'bdTo') { BR[t.id === 'bdFrom' ? 'from' : 'to'] = t.value; bdRender(); return; }
-  onChange(e);
+  if (t.id === 'bdFrom' || t.id === 'bdTo') { BR[t.id === 'bdFrom' ? 'from' : 'to'] = t.value; bdRender(); }
 });
 
 // ───────── Calendar, showings report and cancel (v2.2) ─────────
@@ -3970,7 +3991,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.8';
+const APP_VERSION = '2.9';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
