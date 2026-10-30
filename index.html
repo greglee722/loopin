@@ -309,7 +309,7 @@ textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--
 .inq { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px dashed var(--line); } .inq:last-child { border: 0; }
 /* Lead as its own page: FUB-style three columns */
 .lp { display: grid; grid-template-columns: 320px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-.lp-col { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.lp-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; overflow-wrap: anywhere; }
 .idcard { display: grid; gap: 10px; }
 .idtop { display: flex; gap: 12px; align-items: center; } .idtop h2 { font-size: 21px; font-weight: 700; margin: 0; letter-spacing: -.2px; }
 .avatar.lg { width: 56px; height: 56px; font-size: 20px; }
@@ -742,6 +742,15 @@ button.custcard:hover { border-color: var(--accent); }
 .panel.full { width: 100%; box-shadow: none; }
 .panel.full .panel-head, .panel.full .panel-body { width: min(920px, 100%); margin-inline: auto; }
 .panel.full .panel-head { background: none; border-bottom: 0; }
+/* v2.5 full lead page: three columns (.lp is above); stacks under 1100px */
+.lpwrap { width: min(1500px, 100%); margin-inline: auto; padding: 14px 18px 30px; box-sizing: border-box; }
+.panel.full { overflow-x: hidden; top: var(--tb, 56px); padding-top: 0; }
+html.leadfull .topbar { z-index: 42; }   /* the full page sits under the top bar, so Dashboard/People/Calendar stay reachable */
+html.leadfull .scrim { display: none; }
+.fi .grow { min-width: 0; overflow-wrap: anywhere; flex: 1 1 auto; }
+.fi .note { border-left: 0; padding: 0; }
+.fi .inq.shrow { border-bottom: 0; padding: 0; }
+
 .stepper { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
 .stepper .btn.small { padding: 1px 9px; }
 .fpanel .savebar { padding: 0 12px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -992,8 +1001,8 @@ function makeApi(url, key) {
     async setStage(id, stageId, extra) {
       return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(cols()).single());
     },
-    async addNote(personId, meId, body) {
-      return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: 'note', body }).select(NOTE_COLS).single());
+    async addNote(personId, meId, body, kind = 'note') {   // v2.5: kind 'text_log' for Log text (the notes.kind check already allows it)
+      return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: kind === 'text_log' ? 'text_log' : 'note', body }).select(NOTE_COLS).single());
     },
     // v2.4: People columns and smart lists. Row-level security turns a refused UPDATE into 0 rows (no error), so these return the rows and the caller checks for 0.
     // Columns are { cols: [column keys, Name first] } or null (null = use the next level: own, then team default, then built-in).
@@ -1080,7 +1089,7 @@ const state = {
   stages: [], stageMap: new Map(), fields: [],
   q: '', zOn: true, zSig: '',
   sl: 'all', filters: [], lists: [], listsVer: 0, listsErr: '', showF: false,   // v2.4: the chosen list, the filters on screen, the smart_lists rows
-  colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, openedAt: 0,   // columns, full page, Person X of N
+  colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, navLabel: '', compTab: 'note', feedTab: 'all', openedAt: 0,   // columns, full page, Person X of N
   sort: { key: 'created', dir: 'desc' }, limit: SHOW,
   loading: false, total: null, loadFailed: false, cursor: null, loadErr: '',
   open: null, detail: null, detailErr: '', draft: '', pushed: false, missing: false,
@@ -1195,7 +1204,7 @@ async function doSignOut() {
 function resetApp() {
   loadGen++;
   all = []; idx.clear(); byId.clear(); busy.clear(); pend.clear();
-  Object.assign(state, { userId: null, user: null, me: null, q: '', zOn: true, zSig: '', limit: SHOW, sl: 'all', filters: [], lists: [], listsVer: 0, listsErr: '', showF: false, colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, openedAt: 0,
+  Object.assign(state, { userId: null, user: null, me: null, q: '', zOn: true, zSig: '', limit: SHOW, sl: 'all', filters: [], lists: [], listsVer: 0, listsErr: '', showF: false, colOwn: null, colTeam: null, colCat: 'details', colsLocal: false, full: false, navIds: null, navLabel: '', openedAt: 0,
     loading: false, total: null, loadFailed: false, cursor: null, loadErr: '', open: null, detail: null, detailErr: '', draft: '', pushed: false,
     onlyIds: null, bulk: null, list: [], shownIds: [], edit: null, lastEdit: null, tags: [], agentTags: false,
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
@@ -1867,13 +1876,13 @@ $('#railSelect').addEventListener('change', e => pickList(e.target.value));
 $('#listReset').addEventListener('click', () => { pickList(state.sl); toast("Back to the list's own filters."); });
 $('#rows').addEventListener('click', e => {
   if (e.target.closest('input, select, button, a, label')) return;
-  const r = e.target.closest('[data-open]'); if (r) { state.full = false; state.navIds = (state.list || []).map(p => p.id); openPanel(r.dataset.open); }
+  const r = e.target.closest('[data-open]'); if (r) { state.navIds = (state.list || []).map(p => p.id); state.navLabel = $('#listTitle').textContent || 'People'; openPanel(r.dataset.open, leadPref() === 'full'); }
 });
 $('#rows').addEventListener('dblclick', e => {
   if (e.target.closest('input, select, button, a, label')) return;
   const r = e.target.closest('[data-open]'); if (!r) return;
-  state.full = true; state.navIds = (state.list || []).map(p => p.id);
-  if (state.open === r.dataset.open) renderPanel(); else openPanel(r.dataset.open);
+  state.navIds = (state.list || []).map(p => p.id); state.navLabel = $('#listTitle').textContent || 'People';
+  if (state.open === r.dataset.open) setLeadMode(true); else openPanel(r.dataset.open, true);
 });
 $('#rows').addEventListener('change', onChange);
 // The People page is a fixed window on wide screens (notes v28); the frozen Name column casts a shadow while the table is scrolled sideways.
@@ -2301,11 +2310,16 @@ function openGate(p, st, miss) {
 }
 
 // ───────── Person panel ─────────
-// Routes: #dash, #people, #p/<uuid> (the person opens over whichever view is showing).
+// Routes: #dash, #people, #p/<uuid> (side panel), #p/<uuid>/full (full page). The person opens over whichever view is showing.
+// v2.5: the route records the mode, so a reload or a shared link opens the same mode.
 function route() {
   if (!state.me) return;
-  const h = location.hash, m = /^#p\/([0-9a-f-]{36})$/i.exec(h);
-  if (m && UUID.test(m[1])) { showPanel(m[1].toLowerCase()); return; }
+  const h = location.hash, m = /^#p\/([0-9a-f-]{36})(\/full)?$/i.exec(h);
+  if (m && UUID.test(m[1])) {
+    const id = m[1].toLowerCase(), full = !!m[2];
+    if (state.open === id) { if (state.full !== full) { state.full = full; renderPanel(); } return; }
+    state.full = full; showPanel(id); return;
+  }
   if (state.open) hidePanel();
   state.view = h === '#people' ? 'people' : h === '#dash' ? 'dash' : h === '#calendar' ? 'calendar' : h === '#renewals' && state.me.role === 'manager' && state.rOn ? 'renewals' : h === '#settings' && state.me.role === 'manager' ? 'settings' : state.view;
   applyView();
@@ -2331,10 +2345,20 @@ function applyView() {
   else renderList();
 }
 window.addEventListener('hashchange', route);
-function openPanel(id) {
+// Per browser: "Open a lead in" (Settings > My settings). Default is the side panel.
+const LEAD_VIEW_KEY = 'loopin.leadView';
+function leadPref() { try { return localStorage.getItem(LEAD_VIEW_KEY) === 'full' ? 'full' : 'side'; } catch (_) { return 'side'; } }
+function setLeadPref(v) { try { localStorage.setItem(LEAD_VIEW_KEY, v === 'full' ? 'full' : 'side'); return true; } catch (_) { return false; } }
+const leadHash = (id, full) => '#p/' + id + (full ? '/full' : '');
+// Switch the open lead between side panel and full page without adding a history entry.
+function setLeadMode(full) {
+  state.full = !!full; renderPanel();
+  if (state.open) { try { location.replace(location.href.split('#')[0] + leadHash(state.open, state.full)); } catch (_) {} }
+}
+function openPanel(id, full) {
   if (!UUID.test(id)) return;
   state.pushed = true;
-  location.hash = '#p/' + id;
+  location.hash = leadHash(id, full === undefined ? state.full : !!full);
   if (state.open !== id) route();   // a missing hashchange (same hash) still opens the panel
 }
 function closePanel() {
@@ -2342,12 +2366,12 @@ function closePanel() {
   try { history.replaceState(null, '', location.href.split('#')[0] + '#' + state.view); } catch (_) {}
   hidePanel();
 }
-function closePanelQuiet() { state.full = false; state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
+function closePanelQuiet() { state.full = false; document.documentElement.classList.remove('leadfull'); state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
 function hidePanel() { closePanelQuiet(); }
 $('#scrim').addEventListener('click', closePanel);
 $('#panel').addEventListener('click', e => {
   const st = e.target.closest('[data-step]'); if (st && !st.disabled) { stepPerson(+st.dataset.step); return; }
-  if (e.target.closest('#pFull')) { state.full = !state.full; renderPanel(); }
+  if (e.target.closest('#pFull')) setLeadMode(!state.full);
 });
 $('#nav').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; go(b.dataset.view); window.scrollTo(0, 0); });
 
@@ -2374,11 +2398,13 @@ async function showPanel(id) {
   renderPanel();
 }
 const editbox = (inner, dis = '') => `<div class="editbox">${inner}<div class="err" id="editErr"></div><div class="row" style="justify-content:flex-end"><button class="btn small" data-editcancel ${dis}>Cancel</button><button class="btn small primary" data-editsave ${dis}>Save</button></div></div>`;
-function noteHtml(n, p) {
+// full = the v2.5 full-page timeline: every kind carries its label (Note, Text logged, Calendly answers, Update, Imported).
+const NOTE_LABELS = { note: 'Note', text_log: 'Text logged', calendly: 'Calendly answers', system: 'Update', import: 'Imported' };
+function noteHtml(n, p, full) {
   const kind = String(n.kind || 'note').replace(/[^a-z_]/g, '');
-  const label = { calendly: 'Calendly answers · ', text_log: 'Text logged · ', email: 'Email · ' }[kind] || '';
+  const label = full ? (NOTE_LABELS[kind] || 'Note') + ' · ' : { calendly: 'Calendly answers · ', text_log: 'Text logged · ', email: 'Email · ' }[kind] || '';
   // No author: the calendar sync wrote it (kind calendly), else the FUB import did.
-  const who = n.author_id ? (memberName(n.author_id) || 'Team member') : kind === 'calendly' ? 'Calendar sync' : 'FUB';
+  const who = n.author_id ? (memberName(n.author_id) || 'Team member') : kind === 'calendly' ? 'Calendar sync' : full && kind === 'system' ? 'LoopIn' : 'FUB';
   const can = p && canEdit(p) && canEditNote(n), dis = p && busy.has(p.id) ? 'disabled' : '';
   if (can && state.edit === 'note:' + n.id) return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}</div>${editbox(`<textarea id="eNote" aria-label="Edit note">${esc(n.body)}</textarea>`, dis)}</div>`;
   return `<div class="note ${kind}"><div class="meta">${label}<b>${esc(who)}</b> · ${esc(rel(n.created_at))}${can ? ` <span class="spacer"></span><button class="pen" data-edit="note:${esc(n.id)}" aria-label="Edit note" ${dis}>${penSvg}</button><button class="pen" data-del="note" data-id="${esc(n.id)}" aria-label="Delete note" ${dis}>×</button>` : ''}</div><pre>${esc(n.body)}</pre>${mergeUndoBtn(n)}</div>`;
@@ -2402,7 +2428,7 @@ function stepperHtml() {
 function stepPerson(d) {
   const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1, j = i + d;
   if (i < 0 || j < 0 || j >= ids.length) return;
-  location.replace(location.href.split('#')[0] + '#p/' + ids[j]);   // replaces the entry, so Back still returns to the list
+  location.replace(location.href.split('#')[0] + leadHash(ids[j], state.full));   // keeps the mode; replaces the entry, so Back still returns to the list
   const el = $('#panel'); if (el) el.scrollTop = 0;
 }
 function renderPanel() {
@@ -2417,6 +2443,8 @@ function renderPanel() {
   const hadFocus = document.activeElement && document.activeElement.id === 'newNote';
   const p = byId.get(state.open);
   el.classList.toggle('full', state.full);
+  document.documentElement.classList.toggle('leadfull', !!state.full);
+  if (state.full) document.documentElement.style.setProperty('--tb', Math.round($('.topbar').getBoundingClientRect().bottom) + 'px');
   const head = (title, raw) => `<div class="panel-head"><div class="row top">${raw || `<h2>${title}</h2>`}<button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>${stepperHtml()}`;
   if (!p) {
     el.innerHTML = head(state.missing ? 'Not found' : 'Loading…') + `</div><div class="panel-body"><div class="${state.missing ? 'err-s' : 'loading-s'}">${state.missing ? 'This person could not be found, or you do not have access.' : 'Loading…'}</div></div>`;
@@ -2447,34 +2475,82 @@ function renderPanel() {
     ${state.fields.map(f => state.edit === 'field:' + f.key
       ? `<div class="dvals" data-field="${esc(f.key)}" style="display:block"><div class="field"><label>${esc(f.label)}${f.required_for_nonworkable ? ' <span class="req" title="Required before Non-workable">*</span>' : ''}</label>${editbox(fieldInput(f, (p.custom || {})[f.key]), dis)}</div></div>`
       : `<div class="dvals" data-field="${esc(f.key)}"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}</span>${pen('field:' + f.key, 'Edit ' + f.label)}</div>`).join('')}</div>`;
-  let inq, notes;
-  if (state.detailErr) { inq = notes = `<div class="err-s">${esc(state.detailErr)}</div>`; }
-  else if (!d) { inq = notes = '<div class="loading-s">Loading…</div>'; }
-  else {
-    inq = d.inquiries.map(i => `<div class="inq"><div><b>${esc(i.listing_address || 'No listing')}</b>${i.listing_price != null ? ` <span class="sub num">${esc(money(i.listing_price))}/mo</span>` : ''}</div><div class="sub">${esc(fmtShort(i.received_at))} · ${esc(i.source)}</div>${i.message ? `<div>${esc(i.message)}</div>` : ''}</div>`).join('') || '<div class="sub">None</div>';
-    const box = canEdit(p) ? `<div class="notebox"><textarea id="newNote" placeholder="Add a note" aria-label="Add a note"></textarea><div class="row"><button class="btn small primary" id="saveNote" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Save</button></div></div>` : '';
-    notes = box + `<div class="timeline">${d.notes.map(n => noteHtml(n, p)).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
-  }
+  const inqOf = (d) => d.inquiries.map(i => `<div class="inq"><div><b>${esc(i.listing_address || 'No listing')}</b>${i.listing_price != null ? ` <span class="sub num">${esc(money(i.listing_price))}/mo</span>` : ''}</div><div class="sub">${esc(fmtShort(i.received_at))} · ${esc(i.source)}</div>${i.message ? `<div>${esc(i.message)}</div>` : ''}</div>`).join('') || '<div class="sub">None</div>';
+  const loadOrErr = state.detailErr ? `<div class="err-s">${esc(state.detailErr)}</div>` : '<div class="loading-s">Loading…</div>';
+  const inq = d ? inqOf(d) : loadOrErr;
   const on = isContacted(p);
   const by = firstName(p.contacted_by);
   const titleHtml = state.edit === 'name' && can
     ? editbox(`<div class="edrow nolabel"><input id="eFirst" value="${esc(p.first_name)}" placeholder="First name" aria-label="First name"></div><div class="edrow nolabel"><input id="eLast" value="${esc(p.last_name)}" placeholder="Last name" aria-label="Last name"></div>`, dis)
     : `<h2>${esc(p._name || '(no name)')}${pen('name', 'Edit name')}</h2>`;
-  el.innerHTML = head('', titleHtml) + `
-      <div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>
-      <span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>
+  const contactedRow = `<div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>`;
+  const agentLine = `<span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>`;
+  const roBanner = canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`;
+  if (!state.full) {
+    // Side panel: one column.
+    let notes;
+    if (!d) notes = loadOrErr;
+    else {
+      const box = canEdit(p) ? `<div class="notebox"><textarea id="newNote" placeholder="Add a note" aria-label="Add a note"></textarea><div class="row"><button class="btn small" id="logText" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Log text</button><button class="btn small primary" id="saveNote" ${busy.has('n:' + p.id) ? 'disabled' : ''}>Save</button></div></div>` : '';
+      notes = box + `<div class="timeline">${d.notes.map(n => noteHtml(n, p)).join('') || '<div class="sub">No notes yet.</div>'}</div>`;
+    }
+    el.innerHTML = head('', titleHtml) + `
+      ${contactedRow}
+      ${agentLine}
     </div>
-    <div class="panel-body">${canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`}${dupBanner(p)}${contact}${details}
+    <div class="panel-body">${roBanner}${dupBanner(p)}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
+  } else {
+    // Full page (v2.5): left = person, Contact, Details; middle = composer and one timeline; right = navigation, Inquiries, Showings, Collaborators.
+    // The same section builders and editors as the side panel; only the layout differs.
+    const dg = ph[0] ? String(ph[0].phone).replace(/\D/g, '') : '';
+    const ct = state.compTab === 'text' ? 'text' : 'note', nb = busy.has('n:' + p.id) ? 'disabled' : '';
+    const sms = dg ? `<a class="ctab-link" id="smsLink" href="sms:+${esc(dg)}">Text ${esc(p.first_name || 'them')} ↗</a>` : '';
+    const composer = can
+      ? `<div class="section comp" id="composer"><div class="ctabs" role="tablist"><button role="tab" data-ctab="note" aria-selected="${ct === 'note'}">Create note</button><button role="tab" data-ctab="text" aria-selected="${ct === 'text'}">Log text</button>${sms}</div>
+        <textarea id="newNote" placeholder="${ct === 'note' ? 'Add a note' : 'What did you text them? (optional)'}" aria-label="${ct === 'note' ? 'Add a note' : 'Text to log'}"></textarea>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary small" id="${ct === 'note' ? 'saveNote' : 'logText'}" ${nb}>${ct === 'note' ? 'Create note' : 'Log text'}</button></div></div>`
+      : (sms ? `<div class="section comp" id="composer"><div class="ctabs" style="margin-bottom:-12px;border-bottom:0">${sms}</div></div>` : '');
+    const ft = state.feedTab === 'notes' || state.feedTab === 'showings' ? state.feedTab : 'all';
+    const ap = state.leadAppts.get(p.id), apLoaded = !!(ap && ap.rows);
+    let feed;
+    if (!d) feed = loadOrErr;
+    else {
+      const rowsA = apLoaded ? ap.rows : [], links = rescheduleLinks(rowsA), now = Date.now();
+      const ico = (cls, ch) => `<span class="fic ${cls}" aria-hidden="true">${ch}</span>`;
+      const NI = { note: ['nt', 'N'], text_log: ['tx', 'T'], calendly: ['cl', 'C'], system: ['sy', '•'], import: ['sy', 'I'] };
+      const items = [
+        ...d.notes.map(n => { const k = String(n.kind || 'note').replace(/[^a-z_]/g, ''), ic = NI[k] || NI.note; return { id: String(n.id), t: Date.parse(n.created_at) || 0, k: k === 'system' ? 'updates' : 'notes', html: `<div class="fi" data-fitem="note">${ico(ic[0], ic[1])}<div class="grow">${noteHtml(n, p, true)}</div></div>` }; }),
+        ...rowsA.map(a => { const gone = a.canceled === true || a.canceled_at != null; return { id: String(a.id), t: Date.parse(a.starts_at) || 0, k: 'showings', html: `<div class="fi" data-fitem="showing">${gone ? ico('cx', '×') : ico('ap', '◷')}<div class="grow">${showingRowHtml(a, links, now, true)}</div></div>` }; }),
+      ].sort((x, y) => y.t - x.t || (x.id < y.id ? -1 : 1));
+      const cnt = (k) => k === 'all' ? items.length : items.filter(x => x.k === k).length;
+      const tabs = [['all', 'All'], ['notes', 'Notes'], ['showings', 'Showings']];
+      const shown = ft === 'all' ? items : items.filter(x => x.k === ft);
+      const body = shown.map(x => x.html).join('') || (ft === 'showings' && !apLoaded ? (ap && ap.err ? `<div class="err-s">${esc(ap.err)}</div>` : '<div class="loading-s">Loading…</div>') : '<div class="empty-s">Nothing here yet.</div>');
+      feed = `<div class="section feed" id="feed"><div class="ftabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-feed="${k}" aria-selected="${ft === k}">${l} <span class="num">${cnt(k)}</span></button>`).join('')}</div>${body}</div>`;
+    }
+    const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
+    const label = state.navLabel || (state.view === 'dash' ? 'Dashboard' : state.view === 'calendar' ? 'Calendar' : 'People');
+    const navCard = `<div class="section navcard" id="stepper"><div class="row" style="justify-content:space-between;flex-wrap:nowrap">${i >= 0 ? `<button class="btn small" data-step="-1" aria-label="Previous person" ${i === 0 ? 'disabled' : ''}>‹</button><b class="num" id="stepText">Person ${(i + 1).toLocaleString('en-US')} of ${ids.length.toLocaleString('en-US')}</b><button class="btn small" data-step="1" aria-label="Next person" ${i === ids.length - 1 ? 'disabled' : ''}>›</button>` : '<span class="sub">Not in a list</span>'}</div>
+      <div class="row"><button class="btn small" id="closePanel">← ${esc(label)}</button><button class="btn small soft" id="pFull">Open as side panel</button></div></div>`;
+    const collab = !d ? loadOrErr : (d.collaborators || []).map(c => `<div class="vrow">${avatar(c.member_id, 'sm')}<span class="val">${esc(memberName(c.member_id) || 'Team member')}</span></div>`).join('') || '<div class="sub">None</div>';
+    const av = `<div class="avatar lg" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
+    el.innerHTML = `<div class="lpwrap"><div class="lp">
+      <aside class="lp-col" id="lpLeft" aria-label="Person"><div class="section idcard"><div class="idtop">${av}<div style="min-width:0">${titleHtml}</div></div>${contactedRow}${agentLine}</div>${contact}${details}</aside>
+      <section class="lp-col" id="lpMid" aria-label="Activity">${roBanner}${dupBanner(p)}${composer}${feed}</section>
+      <aside class="lp-col" id="lpRight" aria-label="This lead">${navCard}<div class="section"><h4>Inquiries</h4>${inq}</div><div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div><div class="section" id="collabSec"><h4>Collaborators</h4>${collab}</div></aside>
+    </div></div>`;
+  }
   $('#closePanel').onclick = closePanel;
   for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x) { if (x.type === 'checkbox') x.checked = v; else x.value = v; } }
   el.querySelectorAll('.editbox .chip').forEach(c => { const k = c.closest('[data-multi]').dataset.multi + '|' + c.dataset.val; if (k in chips) c.setAttribute('aria-pressed', chips[k]); });
   state.lastEdit = state.edit;
   const ta = $('#newNote');
   if (ta) { ta.value = keep || ''; ta.oninput = () => { state.draft = ta.value; }; if (hadFocus) ta.focus(); }
-  if ($('#saveNote')) $('#saveNote').onclick = saveNote;
+  if ($('#saveNote')) $('#saveNote').onclick = () => saveNote('note');
+  if ($('#logText')) $('#logText').onclick = () => saveNote('text_log');
 }
 $('#panel').addEventListener('change', onChange);
 
@@ -2595,22 +2671,30 @@ $('#panel').addEventListener('click', e => {
   if (t.closest('#dupNot')) { dismissGroup(state.open); return; }
   const um = t.closest('[data-undomerge]'); if (um) { if (!um.disabled) askUndoMerge(um.dataset.undomerge); }
 });
+$('#panel').addEventListener('click', e => {
+  const c = e.target.closest('[data-ctab]'), f = e.target.closest('[data-feed]');
+  if (c) { state.compTab = c.dataset.ctab === 'text' ? 'text' : 'note'; renderPanel(); const ta = $('#newNote'); if (ta) ta.focus(); }
+  else if (f) { state.feedTab = f.dataset.feed; renderPanel(); }
+});
 $('#panel').addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.shiftKey) return;
   if (e.target.id === 'tagAdd') { e.preventDefault(); addTag(); }
   else if (e.target.matches('.editbox input')) { e.preventDefault(); saveEdit(); }
 });
 
-async function saveNote() {
-  const id = state.open, body = ($('#newNote') ? $('#newNote').value : '').trim();
+// kind 'note' = Save / Create note. kind 'text_log' = Log text (v2.5): a note with kind text_log; an empty box logs "Texted <first name>".
+async function saveNote(kind = 'note') {
+  const isText = kind === 'text_log';
+  const id = state.open, typed = ($('#newNote') ? $('#newNote').value : '').trim();
   const pp = byId.get(id);
   if (!pp || !canEdit(pp)) { toast(pp ? readOnlyWhy(pp) : 'This person is not loaded.'); return; }
-  if (!body) { toast('Write the note first.'); $('#newNote').focus(); return; }
+  if (!typed && !isText) { toast('Write the note first.'); $('#newNote').focus(); return; }
+  const body = typed || 'Texted ' + (String(pp.first_name || '').trim() || 'them');
   const key = 'n:' + id;
   if (busy.has(key)) return;
   busy.add(key); renderPanel();
   try {
-    const note = await api.addNote(id, state.me.id, body);
+    const note = await api.addNote(id, state.me.id, body, isText ? 'text_log' : 'note');
     if (state.open === id && state.detail) state.detail.notes.unshift(note);
     state.draft = '';
     if ($('#newNote')) $('#newNote').value = '';
@@ -2618,7 +2702,7 @@ async function saveNote() {
     await reread(id);
   } catch (e) {
     busy.delete(key); renderPanel();
-    toast(e.message || 'The note was not saved.');
+    toast(e.message || (isText ? 'The text was not logged.' : 'The note was not saved.'));
   }
 }
 
@@ -3070,7 +3154,14 @@ $('#dash').addEventListener('click', e => {
   const a = t.closest('[data-agentgo]');
   if (a) { peopleWith({ agent: state.me.role === 'manager' ? a.dataset.agentgo : '', unc: a.dataset.golist === 'waiting' }); return; }
   const o = t.closest('[data-openlead]');
-  if (o) { e.preventDefault(); openPanel(o.dataset.openlead); }
+  if (o) {
+    e.preventDefault();
+    // v2.5: "Person X of N" follows the Dashboard list this link sits in, never an old People list.
+    const box = o.closest('details.hitgroup, section.card'), card = o.closest('section.card'), h2 = card && card.querySelector('h2');
+    state.navIds = box ? [...new Set([...box.querySelectorAll('[data-openlead]')].map(x => x.dataset.openlead))] : null;
+    state.navLabel = h2 && h2.childNodes[0] ? h2.childNodes[0].textContent.trim() : 'Dashboard';
+    openPanel(o.dataset.openlead, leadPref() === 'full');
+  }
 });
 $('#dash').addEventListener('change', onChange);
 
@@ -3276,7 +3367,7 @@ function apptPop(a) {
 $('#view-calendar').addEventListener('click', e => {
   const t = e.target, c = state.cal;
   if (t.closest('[data-calretry]')) { loadCal(); return; }
-  const ap = t.closest('[data-appt]'); if (ap) { const a = findAppt(ap.dataset.appt); if (a) { if (a.person_id) openPanel(a.person_id); else apptPop(a); } return; }
+  const ap = t.closest('[data-appt]'); if (ap) { const a = findAppt(ap.dataset.appt); if (a) { if (a.person_id) { state.navIds = null; state.navLabel = 'Calendar'; openPanel(a.person_id, leadPref() === 'full'); } else apptPop(a); } return; }
   const v = t.closest('[data-calview]'); if (v) { c.view = v.dataset.calview; loadCal(); return; }
   const d = t.closest('[data-calday]'); if (d) { c.at = +dateOnly(d.dataset.calday); c.view = 'day'; loadCal(); return; }
   const nav = t.closest('[data-calnav]');
@@ -3393,17 +3484,19 @@ function showingsHtml(p) {
   if (!e.rows) return `<div class="err-s">${esc(e.err)}</div>`;
   if (!e.rows.length) return '<div class="sub">No showings yet.</div>';
   const links = rescheduleLinks(e.rows), now = Date.now();
-  return e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => {
+  return e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => showingRowHtml(a, links, now)).join('');
+}
+// One showing. inTimeline (v2.5 full page): no data-shrow and no buttons, so the right-hand Showings card stays the one place to act.
+function showingRowHtml(a, links, now, inTimeline) {
     const t = Date.parse(a.starts_at), gone = a.canceled === true || a.canceled_at != null, lk = links.get(a.id);
     const who = a.canceled_by ? (firstName(a.canceled_by) || 'Team member') : 'Calendly';
     const note = a.cancel_note && !cancelByCalendly(a) ? `<br>${esc(a.cancel_note)}` : '';
     const acts = (isShowing(a) && !gone && t > now && mayCancel(a) ? `<button class="btn small" data-apptcancel="${esc(a.id)}">Cancel showing</button>` : '')
       + (isShowing(a) && gone && mayCancel(a) ? `<button class="btn small" data-appteditreason="${esc(a.id)}">Edit reason</button>` : '');
-    return `<div class="inq shrow ${gone ? 'gone' : ''}" data-shrow="${esc(a.id)}"><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
+    return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
       <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}</div>
       ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
-      ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
-  }).join('');
+      ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && !inTimeline ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
 }
 $('#panel').addEventListener('click', e => {
   const c = e.target.closest('[data-apptcancel]'), r = e.target.closest('[data-appteditreason]');
@@ -3637,7 +3730,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -3836,7 +3929,9 @@ function pageMine(S) {
       <div class="err" id="setErr"></div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" data-mysave ${sdis()}>Save</button></div></div>
     <div class="section" style="margin-top:14px" id="themeBox"><h4>Theme</h4><div class="toggle"><div><b>Appearance</b><div class="sub">Light, dark, or follow your device.</div></div>
       <span class="seg" role="group" aria-label="Theme">${[['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].map(([v, t]) => `<button data-theme-pick="${v}" aria-pressed="${th === v}" ${sdis()}>${t}</button>`).join('')}</span></div></div>
-    <div class="cust" style="margin-top:18px" id="mineSoon"><h2>Coming soon</h2>${[['Profile photo', 'Upload a photo to replace your initials'], ['Open a lead in', 'Side panel or full page'], ['My reminders', 'Move-in and "Still looking?" reminders']].map(([t, s]) => `<div class="soonrow" aria-disabled="true"><div><b>${esc(t)}</b><div class="sub">${esc(s)}</div></div></div>`).join('')}</div>`;
+    <div class="section" style="margin-top:14px" id="leadViewBox"><h4>Lead view</h4><div class="toggle"><div><b>Open a lead in</b><div class="sub">Side panel or full page. Saved on this browser only.</div></div>
+      <span class="seg" role="group" aria-label="Open a lead in">${[['side', 'Side panel'], ['full', 'Full page']].map(([v, t]) => `<button data-leadview="${v}" aria-pressed="${leadPref() === v}">${t}</button>`).join('')}</span></div></div>
+    <div class="cust" style="margin-top:18px" id="mineSoon"><h2>Coming soon</h2>${[['Profile photo', 'Upload a photo to replace your initials'], ['My reminders', 'Move-in and "Still looking?" reminders']].map(([t, s]) => `<div class="soonrow" aria-disabled="true"><div><b>${esc(t)}</b><div class="sub">${esc(s)}</div></div></div>`).join('')}</div>`;
 }
 
 // Email templates
@@ -4022,6 +4117,7 @@ $('#settingsBody').addEventListener('click', async e => {
   const t = e.target, S = state.set, el = (sel) => t.closest(sel);
   if (el('#setRetry')) { S.err = ''; S.loaded = false; openSettings(); return; }
   const sp = el('[data-setpage]'); if (sp) { goSetPage(sp.dataset.setpage); return; }
+  const lvp = el('[data-leadview]'); if (lvp) { if (setLeadPref(lvp.dataset.leadview)) toast('Saved.'); else toast('This browser would not save the choice.'); renderSettings(); return; }
   const tpk = el('[data-theme-pick]'); if (tpk) {
     const v = tpk.dataset.themePick; if (tpk.disabled) return;
     if (await sWrite(async () => { await api.updateMember(state.me.id, { theme: v }); applyTheme(v); })) toast('Saved.'); return;
