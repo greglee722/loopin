@@ -523,6 +523,18 @@ tr.unread .name { font-weight: 700; }
 .appt .time { min-width: 92px; line-height: 1.3; }  /* every Coming up row, linked or not, so the columns line up */
 .bars { display: grid; gap: 8px; padding: 12px 16px; }
 .bar { display: grid; grid-template-columns: 120px minmax(0, 1fr) 28px; gap: 8px; align-items: center; font-size: 13px; }
+.bd .bdfigs { display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 16px 4px; }
+.bd .bdfig { display: grid; gap: 1px; min-width: 92px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.bd .bdfig b { font-size: 20px; font-variant-numeric: tabular-nums; } .bd .bdfig.main b { font-size: 28px; }
+.bd .bdfig span { font-size: 12.5px; color: var(--ink-3); }
+.bd .bdnote { margin: 8px 16px 0; }
+.bd .bdgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 18px; padding: 12px 16px 16px; }
+.bd .bdbox h3 { font-size: 13px; margin: 0 0 6px; color: var(--ink-2); }
+.bd .bdtbl td { padding: 3px 6px 3px 0; border: 0; } .bd .bdtbl td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.bd .track { display: inline-block; width: 70px; height: 8px; vertical-align: middle; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.bd .fill { display: block; height: 100%; background: var(--accent); }
+.bd > h2 select, .bd > h2 input[type=date] { font: inherit; font-size: 13px; font-weight: 400; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.arearow input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: inherit; min-width: 130px; }
 .bar .track { background: var(--surface-2); border-radius: 4px; height: 10px; overflow: hidden; } .bar .fill { display: block; background: var(--accent); height: 100%; border-radius: 4px; }
 .dash-head .spacer { flex: 1; }
 .dslot { position: relative; min-width: 0; }
@@ -867,6 +879,7 @@ const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
+const AREA_COLS = 'id,street,zip,area,draft,created_by,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
 function makeApi(url, key) {
@@ -1034,6 +1047,23 @@ function makeApi(url, key) {
     async mergeLogs(survivorId) {
       return ok(await sb.from('merge_log').select('id,merged_id,created_at,note_id:snapshot->>note_id').eq('survivor_id', survivorId).is('undone_at', null).order('created_at', { ascending: false }));
     },
+    // v2.8 (supabase/15): street and zip area rules for the Lead breakdown. Everyone reads; row-level security lets only a manager write.
+    async areaRules() {
+      const out = [];
+      for (let from = 0; ; from += 1000) {
+        const r = ok(await sb.from('area_rules').select(AREA_COLS).order('id').range(from, from + 999));
+        out.push(...r); if (r.length < 1000) return out;
+      }
+    },
+    async addAreaRule(row) { return ok(await sb.from('area_rules').insert(row).select(AREA_COLS).single()); },
+    async updateAreaRule(id, patch) { return ok(await sb.from('area_rules').update(patch).eq('id', id).select(AREA_COLS)); },
+    async deleteAreaRule(id) { gone(await sb.from('area_rules').delete().eq('id', id).select('id')); },
+    // Each lead's first inquiry (the view), keyset-paged by person id: `after` is null or the last person_id received.
+    async leadFirsts(after) {
+      let q = sb.from('lead_first_inquiry').select('person_id,listing_address,beds').order('person_id').limit(PAGE);
+      if (after) q = q.gt('person_id', after);
+      return ok(await q);
+    },
   };
 }
 // The test harness sets window.LOOPIN_API first, so no real database is touched in tests.
@@ -1115,6 +1145,11 @@ const byId = new Map();       // id -> person
 const busy = new Set();       // ids with a write in flight
 const pend = new Map();       // id -> what the user just asked for, shown until the database answers
 let loadGen = 0;              // changes on sign-out so late pages are dropped
+// v2.8 Lead breakdown and area rules (managers only; see "Lead breakdown" below). One object, rebuilt on sign-out.
+const newBR = () => ({ rules: [], rulesLoaded: false, firsts: new Map(), firstsLoaded: false, loading: false, err: '', ver: 0, preset: '7d', from: '', to: '', idx: null });
+let BR = newBR();
+const needsBR = () => state.filters.some(f => f.key === 'area' || f.key === 'beds');
+const waitBR = () => needsBR() && !BR.firstsLoaded;
 
 function prep(r) {
   const emails = (r.person_emails || []).map(e => e.email);
@@ -1217,7 +1252,7 @@ function resetApp() {
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
     rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
     dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
-  inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
+  BR = newBR(); inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
   $('#search').value = '';
   closeModal();
 }
@@ -1401,6 +1436,9 @@ const FBUILT = {
   contacted: { label: 'Contacted', type: 'yesno', get: (p) => !!p.contacted_at },
   phone: { label: 'Has a phone', type: 'yesno', get: (p) => (p.person_phones || []).length > 0 },
   zacct: { label: 'Zillow account', type: 'choice', z: true, get: (p) => p.zillow_account ? [p.zillow_account] : [] },
+  // v2.8: from the lead's first inquiry (see "Lead breakdown"). Managers only. Empty until that data has loaded; People waits for it before it shows a count.
+  area: { label: 'Area', type: 'choice', mgr: true, get: (p) => BR.firstsLoaded ? [brArea(p.id)] : [] },
+  beds: { label: 'Bedrooms', type: 'choice', mgr: true, get: (p) => BR.firstsLoaded ? [brBeds(p.id)] : [] },
 };
 function fdef(key) {
   key = String(key || '');
@@ -1505,6 +1543,8 @@ function foptions(key) {
   if (key === 'tags') return sourceSets().tags.map(x => [x, x]);
   if (key === 'zacct') return sourceSets().acc.map(x => [x, zLocal(x)]);
   if (key === 'reason') return Object.entries(REASONS);
+  if (key === 'area') { if (!BR.rulesLoaded && !BR.err) loadBreakdown(); return [...areaNames(), 'Unknown'].map(x => [x, x]); }
+  if (key === 'beds') return BEDS.map(x => [x, x]);
   return (d.options || []).map(x => [x, x]);
 }
 function fvalLabel(key, v) {
@@ -1556,7 +1596,7 @@ const listEdited = () => state.sl !== 'all' && state.sl !== 'dups' && JSON.strin
 // The count of every list, in one pass over `all`. Remembered until a person, a list, a stage or the day changes.
 let cntMemo = null;
 function listCounts() {
-  const sig = [state.dupVer, state.listsVer, closingIds().join(), state.fields.length, state.zOn, state.me && state.me.id, localKey(Date.now())].join('|');
+  const sig = [state.dupVer, state.listsVer, closingIds().join(), state.fields.length, state.zOn, state.me && state.me.id, BR.ver, localKey(Date.now())].join('|');
   if (cntMemo && cntMemo.sig === sig) return cntMemo.n;
   if (cntMemo && state.loading && Date.now() - cntMemo.at < 1000) return cntMemo.n;   // while the pages still arrive, recount at most once a second
   const ls = [BUILTIN.unc, ...teamLists(), ...myLists()].map(l => ({ id: l.id, test: compileFilters(listFilters(l)) }));
@@ -1756,6 +1796,7 @@ function syncZFilter() {
 }
 let fnCache = { sig: '', fn: null };
 function filtered() {
+  if (waitBR()) { if (!BR.err) loadBreakdown(); return []; }   // an Area or Bedrooms filter needs the first-inquiry data: show "…", never "matches nobody"
   const q = state.q.trim().toLowerCase();
   const qd = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';   // phone search only when the box holds just digits and punctuation
   const D = state.dup ? dupInfo() : null;
@@ -1869,7 +1910,7 @@ function renderList() {
   if (state.view === 'renewals' || state.view === 'settings') return;
   syncZFilter(); renderDupChrome(); syncQuick();
   const cols = effCols(), list = filtered(), n = list.length, l = curList();
-  $('#count').innerHTML = `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
+  $('#count').innerHTML = waitBR() ? (BR.err ? `Could not load areas. <button class="btn small" id="brRetryP">Try again</button>` : '<b>…</b> people') : `<b>${n.toLocaleString('en-US')}</b> ${n === 1 ? 'person' : 'people'}`;
   $('#listTitle').textContent = l.name; $('#listDesc').textContent = listDesc(l);
   $('#listEdited').hidden = !listEdited();
   $('#thead').innerHTML = headHtml(cols);
@@ -1877,7 +1918,7 @@ function renderList() {
   state.list = list; state.shownIds = rowsShown.map(p => p.id);
   $('#rows').innerHTML = rowsShown.map(p => rowHtml(p, defs)).join('');
   $('#onlyChip').hidden = !state.onlyIds; if (state.onlyIds) $('#onlyText').textContent = `Showing the ${plural(state.onlyIds.size, 'person', 'people')} that were skipped.`;
-  $('#empty').hidden = n > 0 || state.loading;
+  $('#empty').hidden = n > 0 || state.loading || waitBR();
   $('#more').hidden = n <= state.limit;
   $('#moreBtn').textContent = n - state.limit > SHOW ? `Show ${SHOW} more` : `Show ${n - state.limit} more`;
   const ex = $('#exportShown'); ex.hidden = !(canExport() && n > 0 && state.sel.size === 0); ex.textContent = `Export ${n.toLocaleString('en-US')} shown`;
@@ -2376,7 +2417,7 @@ function applyView() {
   $('#view-dash').hidden = v !== 'dash'; $('#view-people').hidden = v !== 'people'; $('#view-renew').hidden = v !== 'renewals'; $('#view-settings').hidden = v !== 'settings'; $('#view-calendar').hidden = v !== 'calendar';
   document.querySelectorAll('#nav [data-view]').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
   renewChrome(); syncFixed();
-  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); }
+  if (v === 'dash') { if (Date.now() - state.apptsAt > 300000) loadAppts(); renderDash(); loadTile(); loadBreakdown(); }
   else if (v === 'calendar') loadCal();
   else if (v === 'settings') openSettings();
   else if (v === 'renewals') { if (Date.now() - state.renew.at > 300000) loadListings(); renderRenew(); }
@@ -3170,8 +3211,147 @@ function renderDash() {
   const look = `<section class="card" id="dash-look"><h2>Needs a look</h2>
     ${due.map(({ p, d, days }) => `<div class="li"><span class="dot off" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">Moves in ${esc(fmtMonthDay(d))}, ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}. Reach back out.</div></div><span class="sub">${who(p.owner_id)}</span></div>`).join('') || '<div class="empty-s">All clear.</div>'}</section>`;
 
-  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>`;
+  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>` + breakdownHtml();
 }
+
+// ───────── Lead breakdown and area rules (v2.8, supabase/15) ─────────
+// A lead counts in a date range by people.created_at (the same local day the "New leads" tiles and the People Created filter use).
+// Its first inquiry gives the address and bedrooms. The area comes from the area_rules table: street + zip, then street, then zip, else "Unknown".
+const BEDS = ['Studio', '1', '2', '3', '4+', 'Unknown'];
+const SUFFIX = { street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave', road: 'rd', rd: 'rd', drive: 'dr', dr: 'dr', place: 'pl', pl: 'pl', terrace: 'ter', ter: 'ter', terr: 'ter',
+  boulevard: 'blvd', blvd: 'blvd', court: 'ct', ct: 'ct', square: 'sq', sq: 'sq', parkway: 'pkwy', pkwy: 'pkwy', lane: 'ln', ln: 'ln' };
+// "112 Jersey St #11, Boston, MA 02215" -> "jersey st". Drops the house number and the unit, shortens the last word, lowercases.
+function streetKey(address) {
+  let s = String(address == null ? '' : address).split(',')[0].trim();
+  s = s.replace(/\s+(?:#\s*\S*|(?:apt|apartment|unit|ste|suite)\.?\s*#?\s*\S+)$/i, '');
+  s = s.replace(/^\d+[a-z]?(?:\s*[-–]\s*\d+[a-z]?)?\s+/i, '');
+  const w = s.toLowerCase().replace(/\s+/g, ' ').trim().split(' ');
+  if (w.length > 1) { const last = w[w.length - 1].replace(/\.$/, ''); w[w.length - 1] = SUFFIX[last] || last; }
+  const out = w.join(' ').replace(/\.$/, '').trim();
+  return out || null;
+}
+// The last 5-digit run (a 9-digit zip's "-1234" part is only 4 digits, so it never counts).
+function zipOf(address) {
+  const re = /(?:^|\D)(\d{5})(?!\d)/g, s = String(address == null ? '' : address);
+  let m, last = null;
+  while ((m = re.exec(s))) last = m[1];
+  return last;
+}
+function buildAreaIdx() {
+  const sz = new Map(), st = new Map(), zp = new Map();
+  for (const r of BR.rules) { if (r.street && r.zip) sz.set(r.street + '|' + r.zip, r.area); else if (r.street) st.set(r.street, r.area); else if (r.zip) zp.set(r.zip, r.area); }
+  BR.idx = { sz, st, zp };
+}
+function areaOf(street, zip) {
+  const x = BR.idx; if (!x) return 'Unknown';
+  return (street && zip && x.sz.get(street + '|' + zip)) || (street && x.st.get(street)) || (zip && x.zp.get(zip)) || 'Unknown';
+}
+const areaFor = (address) => areaOf(streetKey(address), zipOf(address));
+function bedBucket(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return 'Unknown';
+  if (s === '0' || s === 'studio') return 'Studio';
+  const n = parseInt(s, 10);
+  return isNaN(n) || n < 0 ? 'Unknown' : n >= 4 ? '4+' : String(n);
+}
+const brArea = (id) => { const f = BR.firsts.get(id); return f ? f.area : 'Unknown'; };
+const brBeds = (id) => { const f = BR.firsts.get(id); return f ? f.bed : 'Unknown'; };
+const areaNames = () => [...new Set(BR.rules.map(r => r.area))].sort((a, b) => a.localeCompare(b));
+// Rules change: work out every lead's area again (the street and zip stay as they were).
+function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = areaOf(f.street, f.zip); BR.ver++; }
+// Rules and first inquiries load once per session, the first time a manager needs them (Dashboard, Settings > Areas, an Area or Bedrooms filter).
+async function loadBreakdown(force) {
+  if (!isMgr() || BR.loading || (BR.firstsLoaded && BR.rulesLoaded && !force)) return;
+  const gen = loadGen; BR.loading = true; BR.err = ''; refreshBR();
+  try {
+    const rules = await api.areaRules(), firsts = new Map();
+    for (let after = null; ;) {
+      const rows = await api.leadFirsts(after);
+      if (gen !== loadGen) return;
+      for (const r of rows) { const street = streetKey(r.listing_address), zip = zipOf(r.listing_address); firsts.set(r.person_id, { street, zip, bed: bedBucket(r.beds), area: 'Unknown' }); }
+      if (rows.length < PAGE) break;
+      after = rows[rows.length - 1].person_id;
+    }
+    if (gen !== loadGen) return;
+    BR.rules = rules; BR.firsts = firsts; BR.rulesLoaded = BR.firstsLoaded = true;
+    recomputeAreas();
+  } catch (e) { if (gen !== loadGen) return; BR.err = e.message || 'Could not load the lead locations.'; }
+  BR.loading = false; refreshBR();
+}
+async function reloadRules() { const rules = await api.areaRules(); BR.rules = rules; BR.rulesLoaded = true; recomputeAreas(); }
+// Show new data wherever it is on screen.
+function refreshBR() {
+  if (!state.me) return;
+  if (state.view === 'dash') bdRender();
+  else if (state.view === 'people' && (needsBR() || state.showF)) { renderList(); if (state.showF) renderFPanel(); }
+  else if (state.view === 'settings' && state.set.loaded) renderSettings();
+}
+
+// The window of the chosen range as two "YYYY-MM-DD" keys, and the same range as a People Created filter (a relative one moves with the day).
+const BD_PRESETS = [['yest', 'Yesterday', [-1, -1]], ['7d', 'Last 7 days', [-6, 0]], ['14d', 'Last 14 days', [-13, 0]], ['30d', 'Last 30 days', [-29, 0]], ['90d', 'Last 90 days', [-89, 0]], ['custom', 'Custom', null]];
+function bdFilter() {
+  const p = BD_PRESETS.find(x => x[0] === BR.preset);
+  if (p && p[2]) return { key: 'created', op: 'between', rel: p[2].slice() };
+  return { key: 'created', op: 'between', ...(dateKey(BR.from) ? { from: dateKey(BR.from) } : {}), ...(dateKey(BR.to) ? { to: dateKey(BR.to) } : {}) };
+}
+const bdWindow = () => fwindow(bdFilter());
+const BD_DIMS = [['agent', 'By agent'], ['source', 'By source'], ['zacct', 'By Zillow account'], ['area', 'By area'], ['beds', 'By bedrooms'], ['stage', 'By stage']];
+function bdCompute() {
+  const [from, to] = bdWindow(), dims = Object.fromEntries(BD_DIMS.map(d => [d[0], new Map()]));
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  let total = 0;
+  for (const p of all) {
+    const ck = p._ck;
+    if (p.merged_into || !ck || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
+    total++;
+    bump(dims.agent, p.owner_id || NO_AGENT); bump(dims.source, (p.source || '').trim()); bump(dims.zacct, p.zillow_account || '');
+    bump(dims.area, brArea(p.id)); bump(dims.beds, brBeds(p.id)); bump(dims.stage, p.stage_id == null ? '' : String(p.stage_id));
+  }
+  return { total, dims };
+}
+function bdLabel(dim, v) {
+  if (dim === 'agent') return v === NO_AGENT ? 'Unassigned' : (memberName(v) || 'A former member');
+  if (dim === 'source') return v || 'No source';
+  if (dim === 'zacct') return v ? zLocal(v) : 'No account';
+  if (dim === 'stage') { if (v === '') return 'No stage'; const s = state.stageMap.get(+v); return s ? s.name : 'A removed stage'; }
+  return v;
+}
+function breakdownHtml() {
+  if (!isMgr()) return '';
+  const head = (extra = '') => `<h2>Lead breakdown${extra}</h2>`;
+  const wrap = (inner) => `<section class="card bd" id="dash-breakdown">${inner}</section>`;
+  if (BR.err && !BR.firstsLoaded) return wrap(head() + `<div class="empty-s" id="bdErr">Could not load the lead breakdown: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></div>`);
+  if (!BR.firstsLoaded) return wrap(head() + '<div class="empty-s" id="bdLoading">Loading…</div>');
+  const { total, dims } = bdCompute(), fmt = (n) => n.toLocaleString('en-US');
+  const drafts = BR.rules.filter(r => r.draft).length;
+  const ctl = `<span class="spacer"></span><select id="bdRange" aria-label="Date range">${BD_PRESETS.map(x => `<option value="${x[0]}" ${x[0] === BR.preset ? 'selected' : ''}>${x[1]}</option>`).join('')}</select>`
+    + (BR.preset === 'custom' ? `<input type="date" id="bdFrom" value="${esc(BR.from)}" aria-label="From"><input type="date" id="bdTo" value="${esc(BR.to)}" aria-label="To">` : '')
+    + `<button class="btn small" id="bdRefresh" ${BR.loading ? 'disabled' : ''}>Refresh</button>`;
+  const rowsOf = (dim) => [...dims[dim].entries()].map(([v, n]) => ({ v, n, label: bdLabel(dim, v) })).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+  const topSrc = rowsOf('source').slice(0, 3);
+  const figs = `<div class="bdfigs"><div class="bdfig main"><b id="bdTotal">${fmt(total)}</b><span>New leads</span></div>${topSrc.map(r => `<div class="bdfig"><b>${fmt(r.n)}</b><span>${esc(r.label)}</span></div>`).join('')}</div>`;
+  const table = (dim, title) => {
+    const rows = rowsOf(dim);
+    return `<div class="bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
+      <td class="num"><button class="cnt num" data-bdrow="${dim}" data-bdval="${esc(r.v)}" tabindex="-1">${fmt(r.n)}</button></td><td class="num sub">${total ? Math.round(r.n / total * 100) : 0}%</td>
+      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>` : '<div class="empty-s">No new leads in this range.</div>'}</div>`;
+  };
+  const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
+    + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
+  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${BD_DIMS.filter(d => d[0] !== 'zacct' || state.zOn).map(d => table(d[0], d[1])).join('')}</div>`);
+}
+// Redraw only this section, so the rest of the Dashboard keeps its place.
+function bdRender() { const el = $('#dash-breakdown'); if (el) el.outerHTML = breakdownHtml(); else if (state.view === 'dash' && isMgr()) renderDash(); }
+// A row click: People with this value and the same date range, so the list is exactly the leads that were counted.
+function bdGo(dim, val) {
+  const f = [];
+  if (dim === 'stage') f.push(val === '' ? { key: 'stage', op: 'empty' } : { key: 'stage', op: 'any', vals: [+val] });
+  else if (dim === 'source' || dim === 'zacct') f.push(val === '' ? { key: dim, op: 'empty' } : { key: dim, op: 'any', vals: [val] });
+  else f.push({ key: dim, op: 'any', vals: [val] });
+  f.push(bdFilter());
+  peopleWith({ filters: f });
+}
+document.addEventListener('click', e => { if (e.target.closest('#brRetryP')) loadBreakdown(true); });
 
 // Open People with these filters set. Sorted by Created, newest first.
 function peopleWith(o = {}) {
@@ -3180,6 +3360,7 @@ function peopleWith(o = {}) {
   // The Dashboard counts "not contacted" over the last 30 days only, so its links add that window as a Created filter. The People list itself has no cut.
   if (o.unc) state.filters.push({ id: ++fseq, open: false, key: 'created', op: 'between', rel: [-(NOT_CONTACTED_DAYS - 1), 0], vals: [] });
   if (o.agent) state.filters.push({ id: ++fseq, open: false, key: 'agent', op: 'any', vals: [o.agent] });
+  for (const f of o.filters || []) state.filters.push({ vals: [], ...f, id: ++fseq, open: false });   // v2.8: the Lead breakdown adds its own filters
   state.sel.clear(); state.onlyIds = null;
   state.sort = { key: 'created', dir: 'desc' }; state.limit = SHOW;
   if (state.showF) renderFPanel();
@@ -3189,6 +3370,9 @@ function peopleWith(o = {}) {
 $('#dash').addEventListener('click', e => {
   const t = e.target;
   if (t.closest('#dashRetry')) { retryLoad(); return; }
+  const bd = t.closest('[data-bdrow]'); if (bd) { bdGo(bd.dataset.bdrow, bd.dataset.bdval); return; }
+  if (t.closest('#bdRetry') || t.closest('#bdRefresh')) { loadBreakdown(true); return; }
+  if (t.closest('[data-bdareas]')) { goSetPage('areas'); go('settings'); return; }
   const g = t.closest('[data-go]');
   if (g) {
     const k = g.dataset.go;
@@ -3210,7 +3394,16 @@ $('#dash').addEventListener('click', e => {
     openPanel(o.dataset.openlead, leadPref() === 'full');
   }
 });
-$('#dash').addEventListener('change', onChange);
+$('#dash').addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'bdRange') {
+    BR.preset = t.value;
+    if (t.value === 'custom' && !BR.from && !BR.to) { BR.from = localKey(+dayStart(-6)); BR.to = localKey(+dayStart(0)); }
+    bdRender(); return;
+  }
+  if (t.id === 'bdFrom' || t.id === 'bdTo') { BR[t.id === 'bdFrom' ? 'from' : 'to'] = t.value; bdRender(); return; }
+  onChange(e);
+});
 
 // ───────── Calendar, showings report and cancel (v2.2) ─────────
 // Every write here is an UPDATE of appointments by id (never people, so the FUB sync is not touched).
@@ -3777,7 +3970,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.7';
+const APP_VERSION = '2.8';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -3904,6 +4097,48 @@ async function reorderLists(from, to) {
   const [m] = rows.splice(from, 1); rows.splice(to, 0, m);
   await lWrite(async () => { for (let i = 0; i < rows.length; i++) { const want = (i + 1) * 10; if (rows[i].sort_order !== want) await listUpd(rows[i].id, { sort_order: want }); } });
 }
+// ───────── v2.8: Settings > Areas ─────────
+// Streets (from the loaded first inquiries) that no rule names yet, most leads first. `all` counts every such street; `top` is the 40 shown.
+function unmappedStreets() {
+  const named = new Set(BR.rules.filter(r => r.street).map(r => r.street)), by = new Map();
+  for (const f of BR.firsts.values()) {
+    if (!f.street || named.has(f.street)) continue;
+    const e = by.get(f.street) || { street: f.street, n: 0, zips: new Map() }; by.set(f.street, e);
+    e.n++; if (f.zip) e.zips.set(f.zip, (e.zips.get(f.zip) || 0) + 1);
+  }
+  const rows = [...by.values()].sort((a, b) => b.n - a.n || (a.street < b.street ? -1 : 1));
+  for (const e of rows) { const z = [...e.zips.entries()].sort((a, b) => b[1] - a[1])[0]; e.zip = z && z[1] * 2 > e.n ? z[0] : ''; }
+  return { all: rows.length, top: rows.slice(0, 40) };
+}
+const areaUpd = async (id, patch) => { const r = await api.updateAreaRule(id, patch); if (!r || !r.length) throw new Error('Not saved: you do not have access to change this rule.'); return r[0]; };
+async function aWrite(fn) {
+  const S = state.set; if (S.busy) return false;
+  S.busy = true; renderSettings();
+  let ok = true;
+  try { await fn(); await reloadRules(); } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
+  S.busy = false; renderSettings(); return ok;
+}
+const ruleSort = (a, b) => a.area.localeCompare(b.area) || String(a.street || '').localeCompare(String(b.street || '')) || String(a.zip || '').localeCompare(String(b.zip || '')) || a.id - b.id;
+function pageAreas(S) {
+  const head = subHead('Areas', 'A rule names the area for a street, a zip, or both. A street + zip rule beats a street rule, and a street rule beats a zip rule. A draft rule counts like a confirmed one until you confirm it.');
+  if (BR.err && !(BR.firstsLoaded && BR.rulesLoaded)) return head + `<div class="empty-s" id="areaErr">${esc(BR.err)} <button class="btn small" id="areaRetry">Try again</button></div>`;
+  if (!BR.firstsLoaded || !BR.rulesLoaded) return head + '<div class="loading-s">Loading…</div>';
+  const u = unmappedStreets(), names = areaNames();
+  const streets = `<div class="section" id="areaStreets"><h4>Streets without a rule <span class="sub">${u.all.toLocaleString('en-US')} in all, the top ${u.top.length} by leads</span></h4>
+    ${u.top.map(e => `<div class="row arearow" data-areastreet="${esc(e.street)}"><b class="flabel">${esc(e.street)}</b><span class="sub num">${e.n.toLocaleString('en-US')} lead${e.n === 1 ? '' : 's'}${e.zip ? ' · ' + esc(e.zip) : ''}</span><span class="spacer"></span>
+      <input list="areaNames" maxlength="60" placeholder="Area" aria-label="Area for ${esc(e.street)}" ${sdis()}><button class="btn small primary" data-areasave="${esc(e.street)}" ${sdis()}>Save</button></div>`).join('') || '<div class="empty-s">Every street has a rule.</div>'}</div>`;
+  const rules = BR.rules.slice().sort(ruleSort);
+  const list = `<div class="section" id="areaRules"><h4>Rules <span class="sub">${rules.length.toLocaleString('en-US')}</span></h4><div style="overflow-x:auto"><table><thead><tr><th>Street</th><th>Zip</th><th>Area</th><th></th></tr></thead><tbody>${rules.map(r => `<tr data-arule="${r.id}">
+      <td>${r.street ? esc(r.street) : '<span class="sub">any street</span>'}</td><td class="num">${r.zip ? esc(r.zip) : '<span class="sub">any zip</span>'}</td>
+      <td>${S.edit === 'arule:' + r.id ? `<input class="slname" id="sAreaName" value="${esc(r.area)}" maxlength="60" aria-label="Area name"><button class="btn small primary" data-arulesave ${sdis()}>Save</button><button class="btn small" data-setcancel>Cancel</button>` : esc(r.area)}</td>
+      <td><span class="row">${r.draft ? `<span class="pill warn">draft</span><button class="btn small" data-ruleconfirm="${r.id}" ${sdis()}>Confirm</button>` : ''}<button class="btn small" data-ruleedit="${r.id}" ${sdis()}>Edit area</button><button class="btn small danger" data-ruledel="${r.id}" ${sdis()}>Delete</button></span></td></tr>`).join('')}</tbody></table></div></div>`;
+  const add = `<div class="section" id="areaAdd"><h4>Add a rule</h4><div class="fields">
+    <div class="field"><label for="nruleStreet">Street (optional)</label><input id="nruleStreet" placeholder="Queensberry St" ${sdis()}></div>
+    <div class="field"><label for="nruleZip">Zip (optional)</label><input id="nruleZip" inputmode="numeric" maxlength="5" placeholder="02215" ${sdis()}></div>
+    <div class="field"><label for="nruleArea">Area</label><input id="nruleArea" list="areaNames" maxlength="60" placeholder="West Fenway" ${sdis()}></div></div>
+    <div class="row"><button class="btn primary small" id="addRule" ${sdis()}>Add rule</button></div><div class="err" id="setErr"></div></div>`;
+  return head + `<datalist id="areaNames">${names.map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>` + streets + '<div style="height:14px"></div>' + list + '<div style="height:14px"></div>' + add;
+}
 function pageAbout() {
   return subHead('About', 'The plain facts.') + `<div class="section" id="aboutBox"><div class="dvals"><span class="dlabel">Version</span><span class="dval" id="aboutVersion">${esc(APP_VERSION)}</span><span></span></div>
     <div class="dvals"><span class="dlabel">Supabase plan</span><span class="dval">${esc(SUPABASE_PLAN)}</span><span></span></div>
@@ -3958,7 +4193,8 @@ function pageHome(S) {
     + group('Automation', [soon('⚡', 'Auto responses', 'Emails that go out on their own when a new lead comes in, then follow up.'),
       card('templates', '✉️', 'Email templates', `${cv(tc == null ? '—' : `${tc.toLocaleString('en-US')} template${tc === 1 ? '' : 's'}`)} Write the emails your team sends, with blanks like {First name}.`)])
     + group('Customize', [card('fields', '✍️', 'Custom fields', `${cv(S.fields.length)} labels, order, options`), card('stages', '🧰', 'Stages', `${cv(S.stages.length)} order, closes the lead`),
-      card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), card('lists', '📋', 'Smart lists', `${cv(teamLists().length)} order, rename, hide or delete the team lists in the People sidebar.`)])
+      card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), card('lists', '📋', 'Smart lists', `${cv(teamLists().length)} order, rename, hide or delete the team lists in the People sidebar.`),
+      card('areas', '📍', 'Areas', BR.firstsLoaded && BR.rulesLoaded ? `${cv(`${BR.rules.length.toLocaleString('en-US')} rule${BR.rules.length === 1 ? '' : 's'}`)} · ${unmappedStreets().all.toLocaleString('en-US')} street${unmappedStreets().all === 1 ? '' : 's'} need${unmappedStreets().all === 1 ? 's' : ''} an area` : 'Name the area for a street or a zip. The Lead breakdown uses it.')])
     + group('Admin', [card('team', '👥', 'Team', `${cv(S.team.length)} who can sign in`),
       card('system', '🩺', 'System check', issues == null ? (S.hbErr ? 'Not available right now' : 'Checking…') : issues ? `${issues} ${issues === 1 ? 'needs' : 'need'} a look` : 'All lead Gmails OK', issues ? 'warn' : ''),
       card('about', 'ⓘ', 'About', `${cv('v' + APP_VERSION)} version and sync`)]);
@@ -4099,7 +4335,7 @@ async function tplDelete() {
 function goSetPage(pg) {
   const S = state.set, go = () => {
     const from = S.page; S.page = pg || null; S.edit = null; S.my = null; if (S.tpl) S.tpl.draft = null;
-    if (pg === 'templates' && from !== 'templates') loadTpl(); if (pg === 'system' && from !== 'system') loadHb();
+    if (pg === 'templates' && from !== 'templates') loadTpl(); if (pg === 'system' && from !== 'system') loadHb(); if (pg === 'areas') loadBreakdown();
     renderSettings();
   };
   if (!tplDirty()) return go();
@@ -4124,10 +4360,10 @@ function renderSettings() {
   if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
   else if (!S.loaded) html = '<div class="loading-s">Loading…</div>';
   else if (!S.page) html = pageHome(S);
-  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, team: pageTeam, about: pageAbout }[S.page](S);
+  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, areas: pageAreas, team: pageTeam, about: pageAbout }[S.page](S);
   const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
   el.innerHTML = html;
-  for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm)/.test(id)) x.value = v; }
+  for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm|nrule)/.test(id)) x.value = v; }
   if (keepFocus && el.querySelector('#' + CSS.escape(keepFocus))) el.querySelector('#' + CSS.escape(keepFocus)).focus();
 }
 function setErr(m) { const e = $('#setErr'); if (e) e.textContent = m; }
@@ -4163,6 +4399,36 @@ async function setMember(m, patch) {
 $('#settingsBody').addEventListener('click', async e => {
   const t = e.target, S = state.set, el = (sel) => t.closest(sel);
   if (el('#setRetry')) { S.err = ''; S.loaded = false; openSettings(); return; }
+  if (el('#areaRetry')) { loadBreakdown(true); return; }
+  const asv = el('[data-areasave]'); if (asv) {
+    const area = asv.closest('.arearow').querySelector('input').value.trim();
+    if (!area) return toast('Type an area name first.');
+    if (area.length > 60) return toast('An area name can have 60 letters at most.');
+    await aWrite(() => api.addAreaRule({ street: asv.dataset.areasave, zip: null, area, draft: false, created_by: state.me.id })); return;
+  }
+  const rcf = el('[data-ruleconfirm]'); if (rcf) { await aWrite(() => areaUpd(+rcf.dataset.ruleconfirm, { draft: false })); return; }
+  const red = el('[data-ruleedit]'); if (red) { S.edit = 'arule:' + red.dataset.ruleedit; renderSettings(); const i = $('#sAreaName'); if (i) i.focus(); return; }
+  if (el('[data-arulesave]')) {
+    const id = +String(S.edit).slice(6), area = $('#sAreaName').value.trim();
+    if (!area) return toast('An area needs a name.');
+    if (await aWrite(() => areaUpd(id, { area }))) { S.edit = null; renderSettings(); } return;
+  }
+  const rdl = el('[data-ruledel]'); if (rdl) {
+    const r = BR.rules.find(x => String(x.id) === rdl.dataset.ruledel); if (!r) return;
+    showModal(`<h3 id="ruleDelTitle">Delete this rule?</h3><p style="margin:0;color:var(--ink-2)" id="ruleDelText">${esc(r.street || 'Any street')}${r.zip ? ' · ' + esc(r.zip) : ''} → ${esc(r.area)}. Leads that used it move to the next rule, or to Unknown.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn danger" id="ruleDelGo">Delete rule</button></div>`);
+    $('#ruleDelGo').onclick = async () => { closeModal(); await aWrite(() => api.deleteAreaRule(r.id)); };
+    return;
+  }
+  if (el('#addRule')) {
+    const rawS = $('#nruleStreet').value.trim(), zip = $('#nruleZip').value.trim(), area = $('#nruleArea').value.trim(), street = rawS ? streetKey(rawS) : null;
+    if (!street && !zip) return setErr('Enter a street, a zip, or both.');
+    if (zip && !/^\d{5}$/.test(zip)) return setErr('A zip has 5 digits.');
+    if (!area) return setErr('Enter the area name.');
+    if (area.length > 60) return setErr('An area name can have 60 letters at most.');
+    if (BR.rules.some(r => (r.street || null) === street && (r.zip || null) === (zip || null))) return setErr('A rule for that street and zip already exists.');
+    if (await aWrite(() => api.addAreaRule({ street, zip: zip || null, area, draft: false, created_by: state.me.id }))) ['#nruleStreet', '#nruleZip', '#nruleArea'].forEach(i => { const x = $(i); if (x) x.value = ''; });
+    return;
+  }
   const sp = el('[data-setpage]'); if (sp) { goSetPage(sp.dataset.setpage); return; }
   const lvp = el('[data-leadview]'); if (lvp) { if (setLeadPref(lvp.dataset.leadview)) toast('Saved.'); else toast('This browser would not save the choice.'); renderSettings(); return; }
   const tpk = el('[data-theme-pick]'); if (tpk) {
