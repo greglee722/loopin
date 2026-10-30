@@ -909,6 +909,10 @@ function makeApi(url, key) {
       if (r.error) throw Object.assign(new Error(r.error.message), { code: r.error.code });
       return { rows: r.data, count: r.count == null ? null : r.count };
     },
+    // Leads changed (or created, or merged away) since `sinceIso`, 1,000 at a time. Used by the People refresh.
+    async peopleChanged(sinceIso, from) {
+      return ok(await sb.from('people').select(cols()).gte('updated_at', sinceIso).order('updated_at').order('id').range(from, from + PAGE - 1));
+    },
     async person(id) {
       const [notes, inquiries, collaborators] = await Promise.all([
         sb.from('notes').select(NOTE_COLS).eq('person_id', id).order('created_at', { ascending: false }),
@@ -1141,7 +1145,6 @@ function dropRow(id) {
 const zLocal = (a) => String(a || '').split('@')[0];
 const isMissingZ = (e) => !!e && (e.code === '42703' || /zillow_account/i.test(e.message || ''));
 const stageOf = (p) => state.stageMap.get(p.stage_id);
-const closes = (p) => !!(stageOf(p) && stageOf(p).closes_lead);
 const memberName = (id) => { const m = state.teamMap.get(id); return m ? m.full_name : ''; };
 const firstName = (id) => memberName(id).split(' ')[0];
 function avatar(memberId, size = '') {
@@ -1245,6 +1248,7 @@ async function start(session) {
   state.view = location.hash === '#people' ? 'people' : location.hash === '#calendar' ? 'calendar' : location.hash === '#renewals' && me.role === 'manager' ? 'renewals' : location.hash === '#settings' && me.role === 'manager' ? 'settings' : 'dash';
   state.colOwn = parseCols(me.people_columns);
   renderMe(); renderFilters(); setChrome(true);
+  api.allStages().then(r => { if (myGen === loadGen && r) { state.allStageRows = r; if (state.view === 'people') renderList(); } }).catch(() => {});   // falls back to the active stages
   loadPeople(myGen); loadAppts(); loadHits(); loadListings(); loadSyncFrom();
   if (me.role === 'manager') loadDismissals(myGen);
   api.tags().then(r => { if (myGen === loadGen) state.tags = (r || []).map(x => x.name); }).catch(() => {});
@@ -1274,6 +1278,7 @@ async function pageCall(after) {
 }
 function applyZ() { $('#fZ').hidden = !state.zOn; }   // the Zillow account column hides itself: colDef returns nothing while the column is missing
 async function loadPeople(gen, after = null) {
+  if (!after) state.peopleAt = Date.now();   // changes after this moment are picked up by refreshPeople
   state.loading = true; state.loadFailed = false; state.loadErr = '';
   renderLoad();
   try {
@@ -1295,6 +1300,37 @@ async function loadPeople(gen, after = null) {
   renderLoad(); renderList();
   if (state.open) ensureOpenRow(state.open);
 }
+// Review 2026-10-30, item 10: a tab left open picks up new and changed leads (new Zillow leads, the 02:30 sync, other
+// users' edits). On return to the tab and every 5 minutes while visible: re-read leads whose updated_at moved since the
+// last read (5 minutes of overlap covers clock drift). A lead with a write in flight keeps what the user asked for.
+const REFRESH_MS = 5 * 60000;
+async function refreshPeople() {
+  const gen = loadGen;
+  if (!state.me || state.loading || state.loadFailed || state.refreshing || !state.peopleAt) return;
+  if (Date.now() - state.peopleAt < REFRESH_MS - 1000) return;
+  state.refreshing = true;
+  const started = Date.now(), since = new Date(state.peopleAt - REFRESH_MS).toISOString();
+  let n = 0;
+  try {
+    for (let from = 0; ; from += PAGE) {
+      const rows = await api.peopleChanged(since, from);
+      if (gen !== loadGen) return;
+      for (const r of rows) {
+        if (busy.has(r.id) || pend.has(r.id)) continue;
+        if (r.merged_into) { if (idx.has(r.id)) { dropRow(r.id); n++; } continue; }
+        if (!idx.has(r.id) && state.total != null) state.total++;
+        setRow(r); n++;
+      }
+      if (rows.length < PAGE) break;
+    }
+    state.peopleAt = started;
+  } catch (_) { /* the next refresh tries again from the same point */ }
+  finally { if (gen === loadGen) state.refreshing = false; }
+  if (!n || gen !== loadGen) return;
+  if (state.view === 'people') renderList(); else if (state.view === 'dash') renderDash();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshPeople(); });
+setInterval(() => { if (!document.hidden) refreshPeople(); }, 60000);
 // The open person may not be in the list (a link, or a row that failed to load): ask for that one row.
 async function ensureOpenRow(id) {
   if (!byId.has(id)) {
@@ -1389,7 +1425,7 @@ function fwindow(f) {
 const NEVER = () => false;
 // One filter as a test function. Compile once, then run it over the people.
 function compileFilter(f) {
-  const d = fdef(f.key); if (!d || !f || !FOPS[d.type].some(o => o[0] === f.op) || (d.noEmpty && (f.op === 'empty' || f.op === 'notempty'))) return NEVER;
+  const d = f && fdef(f.key); if (!d || !FOPS[d.type].some(o => o[0] === f.op) || (d.noEmpty && (f.op === 'empty' || f.op === 'notempty'))) return NEVER;
   const get = d.get, op = f.op, t = d.type;
   if (t === 'yesno') { const yes = op === 'yes'; return (p) => isYes(get(p)) === yes; }
   if (op === 'empty') return (p) => isBlank(get(p));
@@ -1500,7 +1536,7 @@ function describeFilter(f) {
 let fseq = 0;
 // The filters on screen carry an id and an open flag for the panel. Neither is ever saved.
 const uiFilters = (arr) => (Array.isArray(arr) ? arr : []).filter(f => f && typeof f === 'object').map(f => ({ vals: [], ...JSON.parse(JSON.stringify(f)), id: ++fseq, open: false }));
-const closingIds = () => state.stages.filter(s => s.closes_lead).map(s => s.id);
+const closingIds = () => (state.allStageRows || state.stages).filter(s => s.closes_lead).map(s => s.id);   // a deactivated closing stage still closes its leads
 
 // ───── Smart lists ─────
 const BUILTIN = {
@@ -2702,8 +2738,7 @@ async function saveNote(kind = 'note') {
   try {
     const note = await api.addNote(id, state.me.id, body, isText ? 'text_log' : 'note');
     if (state.open === id && state.detail) state.detail.notes.unshift(note);
-    state.draft = '';
-    if ($('#newNote')) $('#newNote').value = '';
+    if (state.open === id) { state.draft = ''; if ($('#newNote')) $('#newNote').value = ''; }   // the user may have moved on and started typing on another lead
     busy.delete(key); renderPanel();
     await reread(id);
   } catch (e) {
@@ -3742,7 +3777,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.6';
+const APP_VERSION = '2.7';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -3751,7 +3786,7 @@ const ciEq = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLow
 async function loadSettingsData() {
   const S = state.set;
   const [stages, fields, tags, settings, team] = await Promise.all([api.allStages(), api.allFields(), api.tags(), api.settings(), api.allTeam()]);
-  S.stages = stages; S.fields = fields; S.tags = (tags || []).map(t => t.name); S.agentsTags = !!(settings && settings.agents_create_tags); S.team = team;
+  S.stages = stages; state.allStageRows = stages; S.fields = fields; S.tags = (tags || []).map(t => t.name); S.agentsTags = !!(settings && settings.agents_create_tags); S.team = team;
   S.loaded = true; S.err = '';
 }
 async function openSettings() {
