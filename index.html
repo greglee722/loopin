@@ -717,6 +717,8 @@ button.custcard:hover { border-color: var(--accent); }
 .custcard.soon, .soonrow { background: var(--surface-2); box-shadow: none; cursor: default; }
 .custcard.soon .ci, .custcard.soon b, .custcard.soon .cs, .soonrow > div { opacity: .5; }
 .custcard.soon { padding-top: 28px; padding-bottom: 12px; }
+.soonwrap { display: inline-block; cursor: not-allowed; }
+.soonwrap .btn { pointer-events: none; opacity: .5; }
 .soonpill { position: absolute; top: 7px; right: 10px; font-size: 11px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; line-height: 1.6; white-space: nowrap; }
 .soonrow { position: relative; display: block; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
 .tplrow { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 9px 2px; color: var(--ink); flex-wrap: wrap; }
@@ -917,7 +919,7 @@ function makeApi(url, key) {
       return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators) };
     },
     async appointments(fromIso, toIso) {
-      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email')
+      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email,fub_id')
         .gte('starts_at', fromIso).lt('starts_at', toIso).eq('canceled', false).is('canceled_at', null).order('starts_at'));
     },
     // v2.2: the same rows plus canceled ones and the columns the Calendar, report and cancel flow need.
@@ -2066,7 +2068,7 @@ function renderBulk() {
       const allShown = shown.length > 0 && nShown === shown.length, matchN = (state.list || []).length;
       html += `<div class="bulkrow"><b class="num" id="bulkCount">${n.toLocaleString('en-US')} selected</b>
         <select class="btn small" id="bulkStage" aria-label="Change stage"><option value="">Change stage…</option>${state.stages.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
-        <button class="btn small" id="bulkOn">Mark contacted</button><button class="btn small" id="bulkOff">Mark not contacted</button>
+        <button class="btn small" id="bulkOn">Mark contacted</button><button class="btn small" id="bulkOff">Mark not contacted</button>${isMgr() ? '<span class="soonwrap" title="Coming soon"><button class="btn small" id="bulkReassignSoon" disabled aria-disabled="true">Reassign…</button></span>' : ''}
         ${canExport() ? '<button class="btn small" id="bulkExport">Export CSV</button>' : ''}${isMgr() && state.dupOn && n >= 2 ? '<button class="btn small" id="bulkMerge">Merge</button>' : ''}<button class="btn small" id="bulkClear">Clear</button>
         ${allShown && n < matchN ? `<button class="btn small soft" id="selAll">Select all ${matchN.toLocaleString('en-US')} people that match</button>` : ''}</div>
         <div class="sub" id="bulkInfo">${ro === 0 ? `All ${ed.toLocaleString('en-US')} can change.` : `${ed.toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')} can change. ${ro.toLocaleString('en-US')} ${ro === 1 ? 'is an agent\'s lead' : 'are agents\' leads'} (read-only while FUB is their source).`}</div>`;
@@ -2378,6 +2380,7 @@ $('#nav').addEventListener('click', e => { const b = e.target.closest('[data-vie
 async function showPanel(id) {
   if (state.open === id) return;
   state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false; state.edit = null; state.lastEdit = null;
+  if ($('#newNote')) $('#newNote').value = '';   // the full page keeps its composer while stepping: never carry one lead's unsent note to the next
   $('#panel').hidden = false; $('#scrim').hidden = false; document.documentElement.classList.add('noscroll');
   // For a moment the panel and scrim let clicks through, so the second click of a double-click lands on the row (it opens the full page).
   state.openedAt = Date.now(); $('#panel').classList.add('settle'); $('#scrim').classList.add('settle');
@@ -2485,6 +2488,8 @@ function renderPanel() {
     : `<h2>${esc(p._name || '(no name)')}${pen('name', 'Edit name')}</h2>`;
   const contactedRow = `<div class="row"><label class="contacted" ${canEdit(p) ? '' : `title="${esc(readOnlyWhy(p))}"`}><input type="checkbox" data-contact="${esc(p.id)}" ${on ? 'checked' : ''} ${busy.has(p.id) || !canEdit(p) ? 'disabled' : ''}>Contacted${p.contacted_at ? ' · by ' + esc(by || 'a team member') + ', ' + esc(rel(p.contacted_at)) : ''}</label></div>`;
   const agentLine = `<span class="sub">Agent: <b>${esc(p.owner_id ? (memberName(p.owner_id) || 'Team member') : 'Unassigned')}</b> · Created ${esc(fmtShort(p.created_at))} · ${esc(p.source)}</span>`;
+  // Placeholder so Greg can see where reassign goes. Ricky reassigns in FUB until FUB is cancelled (the nightly sync owns owner_id).
+  const reassignSoon = isMgr() ? `<div class="row" style="margin-top:8px"><span class="soonwrap" title="Coming soon"><button class="btn small" id="reassignSoon" disabled aria-disabled="true">Reassign…</button></span></div>` : '';
   const roBanner = canEdit(p) ? '' : `<div class="dupe" id="roBanner">${esc(readOnlyWhy(p))}</div>`;
   if (!state.full) {
     // Side panel: one column.
@@ -2497,6 +2502,7 @@ function renderPanel() {
     el.innerHTML = head('', titleHtml) + `
       ${contactedRow}
       ${agentLine}
+      ${reassignSoon}
     </div>
     <div class="panel-body">${roBanner}${dupBanner(p)}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
@@ -2538,7 +2544,7 @@ function renderPanel() {
     const collab = !d ? loadOrErr : (d.collaborators || []).map(c => `<div class="vrow">${avatar(c.member_id, 'sm')}<span class="val">${esc(memberName(c.member_id) || 'Team member')}</span></div>`).join('') || '<div class="sub">None</div>';
     const av = `<div class="avatar lg" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
     el.innerHTML = `<div class="lpwrap"><div class="lp">
-      <aside class="lp-col" id="lpLeft" aria-label="Person"><div class="section idcard"><div class="idtop">${av}<div style="min-width:0">${titleHtml}</div></div>${contactedRow}${agentLine}</div>${contact}${details}</aside>
+      <aside class="lp-col" id="lpLeft" aria-label="Person"><div class="section idcard"><div class="idtop">${av}<div style="min-width:0">${titleHtml}</div></div>${contactedRow}${agentLine}${reassignSoon}</div>${contact}${details}</aside>
       <section class="lp-col" id="lpMid" aria-label="Activity">${roBanner}${dupBanner(p)}${composer}${feed}</section>
       <aside class="lp-col" id="lpRight" aria-label="This lead">${navCard}<div class="section"><h4>Inquiries</h4>${inq}</div><div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div><div class="section" id="collabSec"><h4>Collaborators</h4>${collab}</div></aside>
     </div></div>`;
@@ -3005,7 +3011,13 @@ function renderDash() {
   const today = appts.filter(x => x.t >= t0 && x.t < t1), coming = appts.filter(x => x.t >= t1 && x.t < t8);
   const next = today.find(x => x.t >= Date.now());
   const todayG = groupBook(today), comingG = groupBook(coming), nextG = next && todayG.find(g => g.as.includes(next.a));
-  const apptsOf = (id) => today.filter(x => x.a.member_id === id).length;
+  // Showings today (Greg 2026-10-30): counted like showingStats (showing kinds, no FUB copies, a double booking once),
+  // and only when the lead is in Options Picked/Complete Showing. Stages arrive with the 02:30 FUB sync.
+  const showStage = state.stages.find(s => /^options picked/i.test(s.name));
+  const inShowStage = (a) => { const p = a.person_id ? byId.get(a.person_id) : null; return !!(p && showStage && p.stage_id === showStage.id); };
+  const showToday = groupBook(today.filter(x => isShowing(x.a) && x.a.fub_id == null && inShowStage(x.a)));
+  const nextShow = showToday.find(g => g.ts.some(t => t >= Date.now())), showWait = state.loading || state.loadFailed;   // a lead not loaded yet would count as 0
+  const apptsOf = (id) => showWait ? '…' : showToday.filter(g => g.a.member_id === id).length;
 
   const h = new Date().getHours();
   const loadLine = state.loadFailed
@@ -3028,7 +3040,7 @@ function renderDash() {
   const tiles = `<div class="tiles ${nTiles === 6 ? 'six' : 'five'}">
     ${tile('New leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
     ${tile('Leads not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
-    ${tile('Appointments today', today.length, state.apptErr ? 'could not load' : next ? `next up ${fmtTime(next.t)}` : 'none left today', '')}
+    ${tile('Showings today', showWait ? '…' : showToday.length, state.apptErr ? 'could not load' : showWait ? 'counting…' : nextShow ? `next up ${fmtTime(nextShow.ts.find(t => t >= Date.now()))}` : 'none left today', '')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
     ${renewTile ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
     ${tile('Showings, last 7 days', showT.v, showT.s, 'show')}
@@ -3041,14 +3053,14 @@ function renderDash() {
 
   // Today's schedule
   const schedule = `<section class="card"><h2>Today's schedule</h2>
-    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : (() => {
+    ${state.apptErr ? `<div class="empty-s">Could not load showings: ${esc(state.apptErr)}</div>` : (() => {
       const rowsT = todayG.map((g) => { const p = g.a.person_id ? byId.get(g.a.person_id) : null; return { a: g.a, t: g.t, g, p, others: apptOthers(g.a, p) }; });
       const slot = 24 + (Math.min(3, 1 + Math.max(0, ...rowsT.map(r => r.others.length))) - 1) * 16;   // one fixed width per list keeps the title column aligned
       return rowsT.map(({ a, t, g, p, others }) => {
       const title = apptTitle(a), n = g.as.length;
       return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div></div>`;
       }).join('');
-    })() || '<div class="empty-s">No appointments today.</div>'}</section>`;
+    })() || '<div class="empty-s">No showings today.</div>'}</section>`;
 
   // Team Hit Lists (read-only): only agents who use LoopIn
   const todayKey = localKey(Date.now());
@@ -3065,7 +3077,7 @@ function renderDash() {
 
   // By agent
   const members = state.team.filter(m => m.active);
-  const byAgent = `<section class="card"><h2>By agent</h2><div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>New this week</th><th>Not contacted</th><th>Appts today</th><th>Hit List</th></tr></thead><tbody>${members.map(m => {
+  const byAgent = `<section class="card"><h2>By agent</h2><div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>New this week</th><th>Not contacted</th><th>Showings today</th><th>Hit List</th></tr></thead><tbody>${members.map(m => {
     const s = per.get(m.id) || { week: 0, unc: 0 }, uses = m.role === 'agent' && m.can_sign_in === true;
     return `<tr data-agent-row="${esc(m.id)}"><td><button class="agentlink" data-agentgo="${esc(m.id)}" title="See ${esc(m.full_name)}'s leads">${avatar(m.id, 'sm')}${esc(m.full_name)}</button></td>
       <td><button class="cnt num" data-agentgo="${esc(m.id)}" data-golist="week" title="${esc(m.full_name)}'s newest leads">${s.week}</button></td>
@@ -3085,12 +3097,12 @@ function renderDash() {
 
   // Coming up
   const comingUp = `<section class="card"><h2>Coming up</h2>
-    ${state.apptErr ? `<div class="empty-s">Could not load appointments: ${esc(state.apptErr)}</div>` : comingG.map((g) => {
+    ${state.apptErr ? `<div class="empty-s">Could not load showings: ${esc(state.apptErr)}</div>` : comingG.map((g) => {
       const { a, t } = g, n = g.as.length, p = a.person_id ? byId.get(a.person_id) : null;
       const when = new Date(t).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       const inner = `<span class="time">${esc(when)}<br><span class="sub">${esc(fmtTime(t))}</span></span><div class="grow"><div class="name">${esc(apptTitle(a) + (n > 1 ? ' · ' + timesTxt(g.ts) : ''))}</div><div class="sub">${apptWho(a, apptOthers(a, p))}${n > 1 ? ' · ' + bookedTxt(n) : ''}${p ? ' · with ' + esc(p._name) : ''}</div></div>${p ? '<span class="sub">Open ›</span>' : ''}`;
       return p ? `<button class="li appt apptrow" data-openlead="${esc(p.id)}">${inner}</button>` : `<div class="li appt">${inner}</div>`;
-    }).join('') || '<div class="empty-s">No upcoming appointments.</div>'}</section>`;
+    }).join('') || '<div class="empty-s">No upcoming showings.</div>'}</section>`;
 
   // Leads by source, this week
   const rows = [...src.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
@@ -3730,7 +3742,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.6';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
