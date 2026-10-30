@@ -533,13 +533,15 @@ tr.unread .name { font-weight: 700; }
 .bd .bdfig b { font-size: 20px; font-variant-numeric: tabular-nums; } .bd .bdfig.main b { font-size: 28px; }
 .bd .bdfig span { font-size: 12.5px; color: var(--ink-3); }
 .bd .bdnote { margin: 8px 0 0; }
-.bd .bdgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-top: 12px; align-items: start; }
-@media (min-width: 1280px) { .bd .bdgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 600px) { .bd .bdgrid { grid-template-columns: minmax(0, 1fr); } }
-.bd .bdbox > h3 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.bd .bdgrid { columns: 2; column-gap: 16px; padding-top: 12px; }   /* columns, not grid rows: a short card never sits beside dead space (Greg 2026-10-30) */
+@media (min-width: 1280px) { .bd .bdgrid { columns: 3; } }
+@media (max-width: 600px) { .bd .bdgrid { columns: 1; } }
+.bd .bdgrid > .bdbox { break-inside: avoid; display: inline-block; width: 100%; margin: 0 0 16px; }
+.bd .bdbox > h3 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--accent-soft); color: var(--accent); border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .bd .bdtbl th { font-size: 12px; padding: 7px 12px; } .bd .bdtbl th.num, .bd .bdtbl td.num { text-align: right; }
 .bd .bdtbl td { padding: 7px 12px; white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 .bd .bdtbl tr:last-child td { border-bottom: 0; }
+.bd .bdfoot { margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--line); font-size: 12px; }
 .bd .bdtbl tbody tr:nth-child(even) td { background: var(--surface-2); }
 .bd .bdtbl tbody tr:hover td { background: var(--accent-soft); }
 .bd .cnt { text-align: right; margin-left: 0; }
@@ -3323,7 +3325,7 @@ function bdCompute() {
     const ck = p._ck;
     if (p.merged_into || !ck || (!isMgr() && p.owner_id !== state.me.id) || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
     total++;
-    bump(dims.agent, p.owner_id || NO_AGENT); bump(dims.source, (p.source || '').trim()); bump(dims.zacct, p.zillow_account || '');
+    bump(dims.agent, p.owner_id || NO_AGENT); bump(dims.source, (p.source || '').trim()); if (/^zillow/i.test(p.source || '')) bump(dims.zacct, p.zillow_account || '');   // only Zillow leads have an account
     bump(dims.area, brArea(p.id)); bump(dims.beds, brBeds(p.id));
   }
   return { total, dims };
@@ -3331,9 +3333,15 @@ function bdCompute() {
 function bdLabel(dim, v) {
   if (dim === 'agent') return v === NO_AGENT ? 'Unassigned' : (memberName(v) || 'A former member');
   if (dim === 'source') return v || 'No source';
-  if (dim === 'zacct') return v ? zLocal(v) : 'No account';
+  if (dim === 'zacct') return v ? zLocal(v) : 'Not captured yet';   // the account comes from the lead email, read only in connected Gmails
   return v;
 }
+// Why a lead lands in "Unknown" (checked 2026-10-30: every Zillow lead had an address; the Unknowns were Apartments.com,
+// website and YGL leads, whose FUB record has no listing, plus Zillow inquiries that came without a bedroom count).
+const UNKNOWN_WHY = {
+  area: 'Unknown: the lead came with no listing address (most are Apartments.com, website and YGL leads), or its street and zip have no area yet (Settings › Areas).',
+  beds: 'Unknown: the lead came with no bedroom count. Zillow sends one on most inquiries; other sources usually don’t.',
+};
 function breakdownHtml() {
   const title = isMgr() ? 'Lead breakdown' : 'My lead breakdown';
   const head = (extra = '') => `<div class="bdtop"><h1>${title}</h1>${extra}</div>`;
@@ -3349,10 +3357,10 @@ function breakdownHtml() {
   const topSrc = rowsOf('source').slice(0, 3);
   const figs = `<div class="bdfigs"><div class="bdfig main"><b id="bdTotal">${fmt(total)}</b><span>New leads</span></div>${topSrc.map(r => `<div class="bdfig"><b>${fmt(r.n)}</b><span>${esc(r.label)}</span></div>`).join('')}</div>`;
   const table = (dim, title) => {
-    const rows = rowsOf(dim);
+    const rows = rowsOf(dim), total = rows.reduce((t, r) => t + r.n, 0);
     return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
       <td class="num"><button class="cnt num" data-bdrow="${dim}" data-bdval="${esc(r.v)}" tabindex="-1">${fmt(r.n)}</button></td><td class="num sub">${total ? Math.round(r.n / total * 100) : 0}%</td>
-      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
+      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>${UNKNOWN_WHY[dim] && rows.some(r => r.v === 'Unknown') ? `<p class="sub bdfoot">${UNKNOWN_WHY[dim]}</p>` : ''}` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
@@ -3991,7 +3999,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '2.9';
+const APP_VERSION = '3.0';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
