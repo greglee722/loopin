@@ -896,7 +896,7 @@ const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
-const AREA_COLS = 'id,street,zip,area,draft,created_by,created_at,updated_at';
+const AREA_COLS = 'id,street,zip,from_no,to_no,area,draft,created_by,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
 function makeApi(url, key) {
@@ -1560,7 +1560,7 @@ function foptions(key) {
   if (key === 'tags') return sourceSets().tags.map(x => [x, x]);
   if (key === 'zacct') return sourceSets().acc.map(x => [x, zLocal(x)]);
   if (key === 'reason') return Object.entries(REASONS);
-  if (key === 'area') { if (!BR.rulesLoaded && !BR.err) loadBreakdown(); return [...areaNames(), 'Unknown'].map(x => [x, x]); }
+  if (key === 'area') { if (!BR.rulesLoaded && !BR.err) loadBreakdown(); return [...areaNames(), NO_RULE, NO_ADDR].map(x => [x, x]); }
   if (key === 'beds') return BEDS.map(x => [x, x]);
   return (d.options || []).map(x => [x, x]);
 }
@@ -3235,7 +3235,10 @@ function renderDash() {
 
 // ───────── Lead breakdown and area rules (v2.8, supabase/15) ─────────
 // A lead counts in a date range by people.created_at (the same local day the "New leads" tiles and the People Created filter use).
-// Its first inquiry gives the address and bedrooms. The area comes from the area_rules table: street + zip, then street, then zip, else "Unknown".
+// Its first inquiry gives the address and bedrooms. The area comes from the area_rules table. Most specific first: street + zip (with a matching house-number range, then without), then street (range, then plain), then zip, else "Unknown".
+// "Unknown" is two things: NO_ADDR (the first inquiry has no listing address, or there is no inquiry) and NO_RULE (it has an address, but no rule matches).
+// A range rule (from_no / to_no, both inclusive, null = open) matches only a lead whose address has a house number. When two ranges match, the narrower one wins.
+const NO_ADDR = 'No address', NO_RULE = 'No rule yet';
 const BEDS = ['Studio', '1', '2', '3', '4+', 'Unknown'];
 const SUFFIX = { street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave', road: 'rd', rd: 'rd', drive: 'dr', dr: 'dr', place: 'pl', pl: 'pl', terrace: 'ter', ter: 'ter', terr: 'ter',
   boulevard: 'blvd', blvd: 'blvd', court: 'ct', ct: 'ct', square: 'sq', sq: 'sq', parkway: 'pkwy', pkwy: 'pkwy', lane: 'ln', ln: 'ln' };
@@ -3249,6 +3252,11 @@ function streetKey(address) {
   const out = w.join(' ').replace(/\.$/, '').trim();
   return out || null;
 }
+// "112A Jersey St" -> 112, "12-14 Queensberry St" -> 12, "1st Ave" -> null (no house number). Same shape streetKey drops.
+function houseNoOf(address) {
+  const m = /^\d+[a-z]?(?:\s*[-–]\s*\d+[a-z]?)?\s+\S/i.exec(String(address == null ? '' : address).split(',')[0].trim());
+  return m ? parseInt(m[0], 10) : null;
+}
 // The last 5-digit run (a 9-digit zip's "-1234" part is only 4 digits, so it never counts).
 function zipOf(address) {
   const re = /(?:^|\D)(\d{5})(?!\d)/g, s = String(address == null ? '' : address);
@@ -3258,14 +3266,22 @@ function zipOf(address) {
 }
 function buildAreaIdx() {
   const sz = new Map(), st = new Map(), zp = new Map();
-  for (const r of BR.rules) { if (r.street && r.zip) sz.set(r.street + '|' + r.zip, r.area); else if (r.street) st.set(r.street, r.area); else if (r.zip) zp.set(r.zip, r.area); }
+  const put = (m, k, r) => {
+    const e = m.get(k) || m.set(k, { any: null, ranges: [] }).get(k);
+    if (r.from_no == null && r.to_no == null) e.any = r.area;
+    else { const lo = r.from_no == null ? 0 : r.from_no, hi = r.to_no == null ? Infinity : r.to_no; e.ranges.push({ lo, hi, area: r.area }); e.ranges.sort((a, b) => { const wa = a.hi - a.lo, wb = b.hi - b.lo; return wa < wb ? -1 : wa > wb ? 1 : b.lo - a.lo; }); }
+  };
+  for (const r of BR.rules) { if (r.street && r.zip) put(sz, r.street + '|' + r.zip, r); else if (r.street) put(st, r.street, r); else if (r.zip && r.from_no == null && r.to_no == null) zp.set(r.zip, { any: r.area, ranges: [] }); }
   BR.idx = { sz, st, zp };
 }
-function areaOf(street, zip) {
-  const x = BR.idx; if (!x) return 'Unknown';
-  return (street && zip && x.sz.get(street + '|' + zip)) || (street && x.st.get(street)) || (zip && x.zp.get(zip)) || 'Unknown';
+// The area of a matching range (narrowest first), else the plain rule, for one key.
+const pickArea = (e, no) => { if (!e) return null; if (no != null) for (const g of e.ranges) if (no >= g.lo && no <= g.hi) return g.area; return e.any; };
+function areaOf(street, zip, no) {
+  const x = BR.idx; if (!x) return NO_RULE;
+  return (street && zip && pickArea(x.sz.get(street + '|' + zip), no)) || (street && pickArea(x.st.get(street), no)) || (zip && pickArea(x.zp.get(zip), null)) || NO_RULE;
 }
-const areaFor = (address) => areaOf(streetKey(address), zipOf(address));
+const hasAddr = (address) => String(address == null ? '' : address).trim() !== '';
+const areaFor = (address) => hasAddr(address) ? areaOf(streetKey(address), zipOf(address), houseNoOf(address)) : NO_ADDR;
 function bedBucket(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   if (!s) return 'Unknown';
@@ -3273,11 +3289,11 @@ function bedBucket(v) {
   const n = parseInt(s, 10);
   return isNaN(n) || n < 0 ? 'Unknown' : n >= 4 ? '4+' : String(n);
 }
-const brArea = (id) => { const f = BR.firsts.get(id); return f ? f.area : 'Unknown'; };
+const brArea = (id) => { const f = BR.firsts.get(id); return f ? f.area : NO_ADDR; };
 const brBeds = (id) => { const f = BR.firsts.get(id); return f ? f.bed : 'Unknown'; };
 const areaNames = () => [...new Set(BR.rules.map(r => r.area))].sort((a, b) => a.localeCompare(b));
-// Rules change: work out every lead's area again (the street and zip stay as they were).
-function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = areaOf(f.street, f.zip); BR.ver++; }
+// Rules change: work out every lead's area again (the street, zip and house number stay as they were).
+function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = f.addr ? areaOf(f.street, f.zip, f.no) : NO_ADDR; BR.ver++; }
 // Rules and first inquiries load once per session, the first time someone needs them (Breakdown, Settings > Areas, an Area or Bedrooms filter).
 async function loadBreakdown(force) {
   if (!state.me || BR.loading || (BR.firstsLoaded && BR.rulesLoaded && !force)) return;
@@ -3287,7 +3303,7 @@ async function loadBreakdown(force) {
     for (let after = null; ;) {
       const rows = await api.leadFirsts(after);
       if (gen !== loadGen) return;
-      for (const r of rows) { const street = streetKey(r.listing_address), zip = zipOf(r.listing_address); firsts.set(r.person_id, { street, zip, bed: bedBucket(r.beds), area: 'Unknown' }); }
+      for (const r of rows) { const street = streetKey(r.listing_address), zip = zipOf(r.listing_address); firsts.set(r.person_id, { street, zip, no: houseNoOf(r.listing_address), addr: hasAddr(r.listing_address), bed: bedBucket(r.beds), area: NO_ADDR }); }
       if (rows.length < PAGE) break;
       after = rows[rows.length - 1].person_id;
     }
@@ -3336,11 +3352,11 @@ function bdLabel(dim, v) {
   if (dim === 'zacct') return v ? zLocal(v) : 'Not captured yet';   // the account comes from the lead email, read only in connected Gmails
   return v;
 }
-// Why a lead lands in "Unknown" (checked 2026-10-30: every Zillow lead had an address; the Unknowns were Apartments.com,
+// Why a lead lands in these rows (checked 2026-10-30: every Zillow lead had an address; the leads with none were Apartments.com,
 // website and YGL leads, whose FUB record has no listing, plus Zillow inquiries that came without a bedroom count).
 const UNKNOWN_WHY = {
-  area: 'Unknown: the lead came with no listing address (most are Apartments.com, website and YGL leads), or its street and zip have no area yet (Settings › Areas).',
-  beds: 'Unknown: the lead came with no bedroom count. Zillow sends one on most inquiries; other sources usually don’t.',
+  area: [[NO_ADDR, 'No address: the lead came with no listing address (most are Apartments.com, website and YGL leads).'], [NO_RULE, 'No rule yet: the lead has an address, but no area rule matches it. Add one in Settings › Areas.']],
+  beds: [['Unknown', 'Unknown: the lead came with no bedroom count. Zillow sends one on most inquiries; other sources usually don’t.']],
 };
 function breakdownHtml() {
   const title = isMgr() ? 'Lead breakdown' : 'My lead breakdown';
@@ -3358,9 +3374,9 @@ function breakdownHtml() {
   const figs = `<div class="bdfigs"><div class="bdfig main"><b id="bdTotal">${fmt(total)}</b><span>New leads</span></div>${topSrc.map(r => `<div class="bdfig"><b>${fmt(r.n)}</b><span>${esc(r.label)}</span></div>`).join('')}</div>`;
   const table = (dim, title) => {
     const rows = rowsOf(dim), total = rows.reduce((t, r) => t + r.n, 0);
-    return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
+    return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button>${dim === 'area' && r.v === NO_RULE && isMgr() ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>
       <td class="num"><button class="cnt num" data-bdrow="${dim}" data-bdval="${esc(r.v)}" tabindex="-1">${fmt(r.n)}</button></td><td class="num sub">${total ? Math.round(r.n / total * 100) : 0}%</td>
-      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>${UNKNOWN_WHY[dim] && rows.some(r => r.v === 'Unknown') ? `<p class="sub bdfoot">${UNKNOWN_WHY[dim]}</p>` : ''}` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
+      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>${(UNKNOWN_WHY[dim] || []).filter(w => rows.some(r => r.v === w[0])).map(w => `<p class="sub bdfoot">${esc(w[1])}</p>`).join('')}` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
@@ -3999,7 +4015,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.0';
+const APP_VERSION = '3.1';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -4127,17 +4143,29 @@ async function reorderLists(from, to) {
   await lWrite(async () => { for (let i = 0; i < rows.length; i++) { const want = (i + 1) * 10; if (rows[i].sort_order !== want) await listUpd(rows[i].id, { sort_order: want }); } });
 }
 // ───────── v2.8: Settings > Areas ─────────
-// Streets (from the loaded first inquiries) that no rule names yet, most leads first. `all` counts every such street; `top` is the 40 shown.
+// What Settings > Areas lists (from the loaded first inquiries), most leads first:
+//  - each street + zip that no rule covers (a rule for that street and zip, or any street-only rule, covers it; a range rule counts), a lead with no zip under its street alone;
+//  - a street + zip a rule covers only by range or by zip, when a lead there still has "No rule yet" (no house number);
+//  - a zip alone ("No street") when the address has a zip but no street, and no zip rule covers it.
+// Every "No rule yet" lead is in one row. `all` counts the rows, `top` is the 40 shown, `unread` counts the leads whose address has neither a street nor a zip.
 function unmappedStreets() {
-  const named = new Set(BR.rules.filter(r => r.street).map(r => r.street)), by = new Map();
+  const sz = new Set(), st = new Set(), by = new Map();
+  let unread = 0;
+  for (const r of BR.rules) if (r.street) (r.zip ? sz : st).add(r.zip ? r.street + '|' + r.zip : r.street);
   for (const f of BR.firsts.values()) {
-    if (!f.street || named.has(f.street)) continue;
-    const e = by.get(f.street) || { street: f.street, n: 0, zips: new Map() }; by.set(f.street, e);
-    e.n++; if (f.zip) e.zips.set(f.zip, (e.zips.get(f.zip) || 0) + 1);
+    if (!f.addr) continue;
+    const open = f.area === NO_RULE;
+    if (!f.street) { if (!open) continue; if (!f.zip) { unread++; continue; } }
+    else if (!open && (st.has(f.street) || (f.zip && sz.has(f.street + '|' + f.zip)))) continue;
+    const k = (f.street || '') + '|' + (f.zip || ''), e = by.get(k) || { street: f.street || '', zip: f.zip || '', n: 0 }; by.set(k, e); e.n++;
   }
-  const rows = [...by.values()].sort((a, b) => b.n - a.n || (a.street < b.street ? -1 : 1));
-  for (const e of rows) { const z = [...e.zips.entries()].sort((a, b) => b[1] - a[1])[0]; e.zip = z && z[1] * 2 > e.n ? z[0] : ''; }
-  return { all: rows.length, top: rows.slice(0, 40) };
+  const rows = [...by.values()].sort((a, b) => b.n - a.n || (a.street < b.street ? -1 : a.street > b.street ? 1 : a.zip < b.zip ? -1 : 1));
+  return { all: rows.length, top: rows.slice(0, 40), unread };
+}
+// "#500 and up", "below #500", "#100–#199" (the bounds are inclusive, so a to-only rule says below to_no + 1).
+function houseRangeText(r) {
+  const a = r.from_no, b = r.to_no;
+  return a == null && b == null ? '' : b == null ? `#${a} and up` : a == null ? `below #${b + 1}` : a === b ? `#${a} only` : `#${a}–#${b}`;
 }
 const areaUpd = async (id, patch) => { const r = await api.updateAreaRule(id, patch); if (!r || !r.length) throw new Error('Not saved: you do not have access to change this rule.'); return r[0]; };
 async function aWrite(fn) {
@@ -4147,23 +4175,26 @@ async function aWrite(fn) {
   try { await fn(); await reloadRules(); } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
   S.busy = false; renderSettings(); return ok;
 }
-const ruleSort = (a, b) => a.area.localeCompare(b.area) || String(a.street || '').localeCompare(String(b.street || '')) || String(a.zip || '').localeCompare(String(b.zip || '')) || a.id - b.id;
+const ruleSort = (a, b) => a.area.localeCompare(b.area) || String(a.street || '').localeCompare(String(b.street || '')) || String(a.zip || '').localeCompare(String(b.zip || '')) || (a.from_no == null ? -1 : a.from_no) - (b.from_no == null ? -1 : b.from_no) || a.id - b.id;
 function pageAreas(S) {
-  const head = subHead('Areas', 'A rule names the area for a street, a zip, or both. A street + zip rule beats a street rule, and a street rule beats a zip rule. A draft rule counts like a confirmed one until you confirm it.');
+  const head = subHead('Areas', 'A rule names the area for a street, a zip, or both, and can cover a range of house numbers. The most specific rule wins: street + zip, then street, then zip. Within a street, a house-number range beats the plain rule, and the narrower range wins. A draft rule counts like a confirmed one until you confirm it.');
   if (BR.err && !(BR.firstsLoaded && BR.rulesLoaded)) return head + `<div class="empty-s" id="areaErr">${esc(BR.err)} <button class="btn small" id="areaRetry">Try again</button></div>`;
   if (!BR.firstsLoaded || !BR.rulesLoaded) return head + '<div class="loading-s">Loading…</div>';
   const u = unmappedStreets(), names = areaNames();
   const streets = `<div class="section" id="areaStreets"><h4>Streets without a rule <span class="sub">${u.all.toLocaleString('en-US')} in all, the top ${u.top.length} by leads</span></h4>
-    ${u.top.map(e => `<div class="row arearow" data-areastreet="${esc(e.street)}"><b class="flabel">${esc(e.street)}</b><span class="sub num">${e.n.toLocaleString('en-US')} lead${e.n === 1 ? '' : 's'}${e.zip ? ' · ' + esc(e.zip) : ''}</span><span class="spacer"></span>
-      <input list="areaNames" maxlength="60" placeholder="Area" aria-label="Area for ${esc(e.street)}" ${sdis()}><button class="btn small primary" data-areasave="${esc(e.street)}" ${sdis()}>Save</button></div>`).join('') || '<div class="empty-s">Every street has a rule.</div>'}</div>`;
+    ${u.top.map(e => `<div class="row arearow" data-areastreet="${esc(e.street)}"><b class="flabel">${e.street ? esc(e.street) : 'No street'}</b><span class="sub num">${e.zip ? esc(e.zip) + ' · ' : ''}${e.n.toLocaleString('en-US')} lead${e.n === 1 ? '' : 's'}</span><span class="spacer"></span>
+      <input list="areaNames" maxlength="60" placeholder="Area" aria-label="Area for ${e.street ? esc(e.street) : 'no street'}${e.zip ? ' ' + esc(e.zip) : ''}" ${sdis()}><button class="btn small primary" data-areasave="${esc(e.street)}" data-areazip="${esc(e.zip)}" ${sdis()}>Save</button></div>`).join('') || '<div class="empty-s">Every street has a rule.</div>'}
+    ${u.unread ? `<div class="row arearow" id="areaUnread"><b class="flabel">Address not readable</b><span class="sub num">${u.unread.toLocaleString('en-US')} lead${u.unread === 1 ? '' : 's'}</span><span class="spacer"></span><span class="sub">No street or zip to make a rule from.</span></div>` : ''}</div>`;
   const rules = BR.rules.slice().sort(ruleSort);
-  const list = `<div class="section" id="areaRules"><h4>Rules <span class="sub">${rules.length.toLocaleString('en-US')}</span></h4><div style="overflow-x:auto"><table><thead><tr><th>Street</th><th>Zip</th><th>Area</th><th></th></tr></thead><tbody>${rules.map(r => `<tr data-arule="${r.id}">
-      <td>${r.street ? esc(r.street) : '<span class="sub">any street</span>'}</td><td class="num">${r.zip ? esc(r.zip) : '<span class="sub">any zip</span>'}</td>
+  const list = `<div class="section" id="areaRules"><h4>Rules <span class="sub">${rules.length.toLocaleString('en-US')}</span></h4><div style="overflow-x:auto"><table><thead><tr><th>Street</th><th>Zip</th><th>House #</th><th>Area</th><th></th></tr></thead><tbody>${rules.map(r => `<tr data-arule="${r.id}">
+      <td>${r.street ? esc(r.street) : '<span class="sub">any street</span>'}</td><td class="num">${r.zip ? esc(r.zip) : '<span class="sub">any zip</span>'}</td><td class="num">${houseRangeText(r) ? esc(houseRangeText(r)) : '<span class="sub">any number</span>'}</td>
       <td>${S.edit === 'arule:' + r.id ? `<input class="slname" id="sAreaName" value="${esc(r.area)}" maxlength="60" aria-label="Area name"><button class="btn small primary" data-arulesave ${sdis()}>Save</button><button class="btn small" data-setcancel>Cancel</button>` : esc(r.area)}</td>
       <td><span class="row">${r.draft ? `<span class="pill warn">draft</span><button class="btn small" data-ruleconfirm="${r.id}" ${sdis()}>Confirm</button>` : ''}<button class="btn small" data-ruleedit="${r.id}" ${sdis()}>Edit area</button><button class="btn small danger" data-ruledel="${r.id}" ${sdis()}>Delete</button></span></td></tr>`).join('')}</tbody></table></div></div>`;
   const add = `<div class="section" id="areaAdd"><h4>Add a rule</h4><div class="fields">
     <div class="field"><label for="nruleStreet">Street (optional)</label><input id="nruleStreet" placeholder="Queensberry St" ${sdis()}></div>
     <div class="field"><label for="nruleZip">Zip (optional)</label><input id="nruleZip" inputmode="numeric" maxlength="5" placeholder="02215" ${sdis()}></div>
+    <div class="field"><label for="nruleFrom">From # (optional)</label><input id="nruleFrom" inputmode="numeric" maxlength="6" placeholder="500" ${sdis()}></div>
+    <div class="field"><label for="nruleTo">To # (optional)</label><input id="nruleTo" inputmode="numeric" maxlength="6" placeholder="999" ${sdis()}></div>
     <div class="field"><label for="nruleArea">Area</label><input id="nruleArea" list="areaNames" maxlength="60" placeholder="West Fenway" ${sdis()}></div></div>
     <div class="row"><button class="btn primary small" id="addRule" ${sdis()}>Add rule</button></div><div class="err" id="setErr"></div></div>`;
   return head + `<datalist id="areaNames">${names.map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>` + streets + '<div style="height:14px"></div>' + list + '<div style="height:14px"></div>' + add;
@@ -4433,7 +4464,7 @@ $('#settingsBody').addEventListener('click', async e => {
     const area = asv.closest('.arearow').querySelector('input').value.trim();
     if (!area) return toast('Type an area name first.');
     if (area.length > 60) return toast('An area name can have 60 letters at most.');
-    await aWrite(() => api.addAreaRule({ street: asv.dataset.areasave, zip: null, area, draft: false, created_by: state.me.id })); return;
+    await aWrite(() => api.addAreaRule({ street: asv.dataset.areasave || null, zip: asv.dataset.areazip || null, area, draft: false, created_by: state.me.id })); return;
   }
   const rcf = el('[data-ruleconfirm]'); if (rcf) { await aWrite(() => areaUpd(+rcf.dataset.ruleconfirm, { draft: false })); return; }
   const red = el('[data-ruleedit]'); if (red) { S.edit = 'arule:' + red.dataset.ruleedit; renderSettings(); const i = $('#sAreaName'); if (i) i.focus(); return; }
@@ -4444,7 +4475,7 @@ $('#settingsBody').addEventListener('click', async e => {
   }
   const rdl = el('[data-ruledel]'); if (rdl) {
     const r = BR.rules.find(x => String(x.id) === rdl.dataset.ruledel); if (!r) return;
-    showModal(`<h3 id="ruleDelTitle">Delete this rule?</h3><p style="margin:0;color:var(--ink-2)" id="ruleDelText">${esc(r.street || 'Any street')}${r.zip ? ' · ' + esc(r.zip) : ''} → ${esc(r.area)}. Leads that used it move to the next rule, or to Unknown.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn danger" id="ruleDelGo">Delete rule</button></div>`);
+    showModal(`<h3 id="ruleDelTitle">Delete this rule?</h3><p style="margin:0;color:var(--ink-2)" id="ruleDelText">${esc(r.street || 'Any street')}${r.zip ? ' · ' + esc(r.zip) : ''}${houseRangeText(r) ? ' · ' + esc(houseRangeText(r)) : ''} → ${esc(r.area)}. Leads that used it move to the next rule, or to Unknown.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn danger" id="ruleDelGo">Delete rule</button></div>`);
     $('#ruleDelGo').onclick = async () => { closeModal(); await aWrite(() => api.deleteAreaRule(r.id)); };
     return;
   }
@@ -4454,8 +4485,13 @@ $('#settingsBody').addEventListener('click', async e => {
     if (zip && !/^\d{5}$/.test(zip)) return setErr('A zip has 5 digits.');
     if (!area) return setErr('Enter the area name.');
     if (area.length > 60) return setErr('An area name can have 60 letters at most.');
-    if (BR.rules.some(r => (r.street || null) === street && (r.zip || null) === (zip || null))) return setErr('A rule for that street and zip already exists.');
-    if (await aWrite(() => api.addAreaRule({ street, zip: zip || null, area, draft: false, created_by: state.me.id }))) ['#nruleStreet', '#nruleZip', '#nruleArea'].forEach(i => { const x = $(i); if (x) x.value = ''; });
+    const fs = $('#nruleFrom').value.trim(), ts = $('#nruleTo').value.trim();
+    if ((fs && !/^\d{1,6}$/.test(fs)) || (ts && !/^\d{1,6}$/.test(ts))) return setErr('A house number is a whole number, 0 or more.');
+    const fromNo = fs ? +fs : null, toNo = ts ? +ts : null;
+    if (fromNo != null && toNo != null && fromNo > toNo) return setErr('From # cannot be more than To #.');
+    if ((fromNo != null || toNo != null) && !street) return setErr('A house-number range needs a street.');
+    if (BR.rules.some(r => (r.street || null) === street && (r.zip || null) === (zip || null) && (r.from_no == null ? null : r.from_no) === fromNo && (r.to_no == null ? null : r.to_no) === toNo)) return setErr('A rule for that street and zip already exists.');
+    if (await aWrite(() => api.addAreaRule({ street, zip: zip || null, from_no: fromNo, to_no: toNo, area, draft: false, created_by: state.me.id }))) ['#nruleStreet', '#nruleZip', '#nruleFrom', '#nruleTo', '#nruleArea'].forEach(i => { const x = $(i); if (x) x.value = ''; });
     return;
   }
   const sp = el('[data-setpage]'); if (sp) { goSetPage(sp.dataset.setpage); return; }
