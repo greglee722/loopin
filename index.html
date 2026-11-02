@@ -705,6 +705,8 @@ th.num-col button { white-space: nowrap; }
 .tile.static { cursor: default; } .tile.static:hover { border-color: var(--line); }
 .dash-head .loadline { flex-basis: 100%; }
 .dash .card > h2 .pill { font-weight: 600; }
+/* Dashboard card titles use the same accent tint as the Breakdown cards (Greg 2026-11-02). */
+.dash .card > h2 { background: var(--accent-soft); color: var(--accent); border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .hitgroup .li.hit { padding-left: 16px; }
 .sortbtn { cursor: pointer; }
 .panel-head .row.top { justify-content: space-between; flex-wrap: nowrap; }
@@ -3153,7 +3155,10 @@ function renderDash() {
       const slot = 24 + (Math.min(3, 1 + Math.max(0, ...rowsT.map(r => r.others.length))) - 1) * 16;   // one fixed width per list keeps the title column aligned
       return rowsT.map(({ a, t, g, p, others }) => {
       const title = apptTitle(a), n = g.as.length;
-      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div></div>`;
+      // The lead's stage (Greg 2026-11-02): green = Options Picked (counted in Showings today), amber = any other stage.
+      const st = p && stageOf(p);
+      const stg = st ? `<span class="pill ${showStage && st.id === showStage.id ? 'ok' : 'warn'}">${esc(st.name)}</span>` : !a.person_id ? '<span class="sub">No lead linked</span>' : '';
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div>${stg}</div>`;
       }).join('');
     })() || '<div class="empty-s">No showings today.</div>'}</section>`;
 
@@ -4015,7 +4020,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
