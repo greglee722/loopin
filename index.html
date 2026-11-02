@@ -715,6 +715,23 @@ th.num-col button { white-space: nowrap; }
 .notebox .row { justify-content: flex-end; }
 .note .meta b { color: var(--ink-2); }
 .loading-s { color: var(--ink-3); font-size: 13px; padding: 6px 0; }
+/* Loader: the LoopIn rings link, turn once clockwise, then unlink. No visible text; .vh keeps a label for screen readers. */
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lpl { display: block; width: 44px; height: 36px; margin: 18px auto; overflow: visible; --dur: 2.4s; }
+.lpl.sm { display: inline-block; width: 22px; height: 18px; margin: 0; vertical-align: middle; }
+.lpl.lg { width: 72px; height: 58px; }
+.lpl .r { fill: none; stroke-width: 5; } .lpl .r1 { stroke: var(--ink); } .lpl .r2 { stroke: var(--brand); }
+.lpl .a1 { animation: lplL var(--dur) cubic-bezier(.65,0,.35,1) infinite; }
+.lpl .a2 { animation: lplR var(--dur) cubic-bezier(.65,0,.35,1) infinite; }
+.lpl .aw { transform-box: view-box; transform-origin: 32px 32px; animation: lplSpin var(--dur) cubic-bezier(.65,0,.35,1) infinite; }
+@keyframes lplL { 0%, 100% { transform: translateX(-7px); } 25%, 75% { transform: translateX(0); } }
+@keyframes lplR { 0%, 100% { transform: translateX(7px); } 25%, 75% { transform: translateX(0); } }
+@keyframes lplSpin { 0%, 25% { transform: rotate(0deg); } 75%, 100% { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .lpl * { animation: none !important; } }
+.lbar { display: inline-block; width: 120px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; vertical-align: middle; }
+.lbar i { display: block; height: 100%; border-radius: 2px; background: var(--brand); transition: width .3s; }
+.loadmsg { display: inline-flex; align-items: center; gap: 8px; }
+.boot { display: flex; justify-content: center; padding-top: 22vh; }
 .err-s { color: var(--bad); font-size: 13px; padding: 6px 0; }
 .dvals { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) 28px; gap: 6px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .dvals:last-child { border-bottom: 0; }
@@ -813,6 +830,7 @@ html.leadfull .scrim { display: none; }
 </header>
 
 <main>
+  <div class="boot" id="boot" role="status"><svg class="lpl lg" viewBox="12 16 40 32" aria-hidden="true"><g class="aw"><g class="a1"><circle class="r r1" cx="25.5" cy="32" r="10.5"/></g><g class="a2"><circle class="r r2" cx="38.5" cy="32" r="10.5"/></g><g class="a1"><path class="r r1" d="M25.18 21.50 A10.5 10.5 0 0 1 35.78 29.86"/></g></g></svg><span class="vh">Loading LoopIn…</span></div>
   <section id="view-auth" hidden></section>
 
   <section class="view" id="view-dash" hidden><div id="dash"></div></section>
@@ -892,7 +910,7 @@ const SUPABASE_URL = 'https://qxzdwpzhpubcufhvjwjk.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publishable: safe in public code
 
 // The columns one list row needs. Writes ask for the same columns back.
-const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
+const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,custom_auto,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
@@ -1231,12 +1249,12 @@ document.addEventListener('keydown', e => {
 
 // ───────── Sign-in, boot and sign-out ─────────
 function setChrome(on) {
-  $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on;
+  $('#nav').hidden = !on; $('#search').hidden = !on; $('#meBox').hidden = !on; if (on) $('#boot').hidden = true;
   if (on) applyView(); else { $('#view-people').hidden = true; $('#view-dash').hidden = true; $('#view-breakdown').hidden = true; $('#view-renew').hidden = true; $('#view-calendar').hidden = true; $('#navRenew').hidden = true; $('#navSettings').hidden = true; $('#view-settings').hidden = true; }
 }
 function showAuth(html) {
   setChrome(false); closePanelQuiet();
-  const v = $('#view-auth'); v.innerHTML = `<div class="authcard">${html}</div>`; v.hidden = false;
+  const v = $('#view-auth'); v.innerHTML = `<div class="authcard">${html}</div>`; v.hidden = false; $('#boot').hidden = true;
 }
 function showSignIn() {
   showAuth(`<h1>Sign in to LoopIn</h1><p>Use your Google account.</p>
@@ -1285,7 +1303,7 @@ function handleSession(session) {
 async function start(session) {
   const myGen = ++loadGen;
   state.userId = session.user.id; state.user = session.user;
-  $('#view-auth').hidden = true;
+  $('#view-auth').hidden = true; $('#boot').hidden = false;
   let me;
   try { me = await api.me(session.user.id); } catch (e) { if (myGen === loadGen) showFail(e.message); return; }
   if (myGen !== loadGen) return;
@@ -1317,6 +1335,12 @@ function renderMe() {
   $('#meBox').innerHTML = `${avatar(m.id, 'sm')}<span class="nm">${esc(m.full_name)}</span><button class="btn small" id="signOut">Sign out</button>`;
   $('#signOut').onclick = doSignOut;
 }
+
+// The rings loader (see .lpl). `label` is read by screen readers only.
+function loaderSvg(cls = '') {
+  return `<svg class="lpl ${cls}" viewBox="12 16 40 32" aria-hidden="true"><g class="aw"><g class="a1"><circle class="r r1" cx="25.5" cy="32" r="10.5"/></g><g class="a2"><circle class="r r2" cx="38.5" cy="32" r="10.5"/></g><g class="a1"><path class="r r1" d="M25.18 21.50 A10.5 10.5 0 0 1 35.78 29.86"/></g></g></svg>`;
+}
+function loader(label = 'Loading…') { return `<div class="loading-s" role="status">${loaderSvg()}<span class="vh">${label}</span></div>`; }
 
 // ───────── Loading people ─────────
 // One request at a time: each page needs the cursor from the one before. `after` lets a retry
@@ -1408,8 +1432,9 @@ function renderLoad() {
     el.innerHTML = `Some people did not load: ${esc(state.loadErr)} <button class="btn small" id="retryLoad">Try again</button>`;
     $('#retryLoad').onclick = retryLoad;
   } else if (state.loading && state.total != null) {
-    el.className = 'loadmsg'; el.textContent = `Loading ${all.length.toLocaleString('en-US')} of ${state.total.toLocaleString('en-US')}…`;
-  } else if (state.loading) { el.className = 'loadmsg'; el.textContent = 'Loading…'; }
+    const pct = state.total ? Math.min(100, Math.round(all.length / state.total * 100)) : 0;
+    el.className = 'loadmsg'; el.innerHTML = `${loaderSvg('sm')}<span class="lbar" role="progressbar" aria-label="Loading people" aria-valuemin="0" aria-valuemax="${state.total}" aria-valuenow="${all.length}"><i style="width:${pct}%"></i></span><span class="vh">Loading ${all.length.toLocaleString('en-US')} of ${state.total.toLocaleString('en-US')}…</span>`;
+  } else if (state.loading) { el.className = 'loadmsg'; el.innerHTML = `${loaderSvg('sm')}<span class="vh">Loading…</span>`; }
   else { el.className = 'loadmsg'; el.textContent = ''; }
 }
 
@@ -2521,6 +2546,15 @@ function fieldValue(f, v) {
     default: return esc(String(v));
   }
 }
+// Calendly auto-fill (supabase/17). people.custom_auto has one entry per field it touched: filled true = LoopIn wrote the value,
+// filled false = the answer had no usable value. The database drops an entry when a user edits that field, so a typed value shows no mark.
+function autoMark(p, f) {
+  const e = (p.custom_auto || {})[f.key], v = (p.custom || {})[f.key];
+  if (!e || e.source !== 'calendly') return '';
+  if (e.filled === true && !isBlank(v)) return ` <span class="pill info" title="${esc('Calendly answer: ' + (e.raw || ''))}">from Calendly</span>`;
+  if (e.filled === false && f.key === 'move_in_date' && isBlank(v)) return ` <span class="sub">Calendly said: "${esc(e.raw || '')}"</span>`;
+  return '';
+}
 // "Person X of N" with ‹ › through the list as it was when this person was opened from People, plus the full-page switch.
 function stepperHtml() {
   const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
@@ -2548,7 +2582,7 @@ function renderPanel() {
   if (state.full) document.documentElement.style.setProperty('--tb', Math.round($('.topbar').getBoundingClientRect().bottom) + 'px');
   const head = (title, raw) => `<div class="panel-head"><div class="row top">${raw || `<h2>${title}</h2>`}<button class="btn small" id="closePanel"><span class="lg-only">Close</span><span class="sm-only">← Back</span></button></div>${stepperHtml()}`;
   if (!p) {
-    el.innerHTML = head(state.missing ? 'Not found' : 'Loading…') + `</div><div class="panel-body"><div class="${state.missing ? 'err-s' : 'loading-s'}">${state.missing ? 'This person could not be found, or you do not have access.' : 'Loading…'}</div></div>`;
+    el.innerHTML = head(state.missing ? 'Not found' : '<span class="vh">Loading…</span>') + `</div><div class="panel-body">${state.missing ? '<div class="err-s">This person could not be found, or you do not have access.</div>' : loader()}</div>`;
     $('#closePanel').onclick = closePanel; return;
   }
   const ph = p.person_phones || [], em = p.person_emails || [];
@@ -2575,9 +2609,9 @@ function renderPanel() {
     ${state.zOn && p.zillow_account ? `<div class="dvals" id="zRow"><span class="dlabel">Zillow account</span><span class="dval" title="${esc(p.zillow_account)}">${esc(zLocal(p.zillow_account))}</span><span></span></div>` : ''}
     ${state.fields.map(f => state.edit === 'field:' + f.key
       ? `<div class="dvals" data-field="${esc(f.key)}" style="display:block"><div class="field"><label>${esc(f.label)}${f.required_for_nonworkable ? ' <span class="req" title="Required before Non-workable">*</span>' : ''}</label>${editbox(fieldInput(f, (p.custom || {})[f.key]), dis)}</div></div>`
-      : `<div class="dvals" data-field="${esc(f.key)}"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}</span>${pen('field:' + f.key, 'Edit ' + f.label)}</div>`).join('')}</div>`;
+      : `<div class="dvals" data-field="${esc(f.key)}"><span class="dlabel">${esc(f.label)}</span><span class="dval">${fieldValue(f, (p.custom || {})[f.key])}${autoMark(p, f)}</span>${pen('field:' + f.key, 'Edit ' + f.label)}</div>`).join('')}</div>`;
   const inqOf = (d) => d.inquiries.map(i => `<div class="inq"><div><b>${esc(i.listing_address || 'No listing')}</b>${i.listing_price != null ? ` <span class="sub num">${esc(money(i.listing_price))}/mo</span>` : ''}</div><div class="sub">${esc(fmtShort(i.received_at))} · ${esc(i.source)}</div>${i.message ? `<div>${esc(i.message)}</div>` : ''}</div>`).join('') || '<div class="sub">None</div>';
-  const loadOrErr = state.detailErr ? `<div class="err-s">${esc(state.detailErr)}</div>` : '<div class="loading-s">Loading…</div>';
+  const loadOrErr = state.detailErr ? `<div class="err-s">${esc(state.detailErr)}</div>` : loader();
   const inq = d ? inqOf(d) : loadOrErr;
   const on = isContacted(p);
   const by = firstName(p.contacted_by);
@@ -2632,7 +2666,7 @@ function renderPanel() {
       const cnt = (k) => k === 'all' ? items.length : items.filter(x => x.k === k).length;
       const tabs = [['all', 'All'], ['notes', 'Notes'], ['showings', 'Showings']];
       const shown = ft === 'all' ? items : items.filter(x => x.k === ft);
-      const body = shown.map(x => x.html).join('') || (ft === 'showings' && !apLoaded ? (ap && ap.err ? `<div class="err-s">${esc(ap.err)}</div>` : '<div class="loading-s">Loading…</div>') : '<div class="empty-s">Nothing here yet.</div>');
+      const body = shown.map(x => x.html).join('') || (ft === 'showings' && !apLoaded ? (ap && ap.err ? `<div class="err-s">${esc(ap.err)}</div>` : loader()) : '<div class="empty-s">Nothing here yet.</div>');
       feed = `<div class="section feed" id="feed"><div class="ftabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-feed="${k}" aria-selected="${ft === k}">${l} <span class="num">${cnt(k)}</span></button>`).join('')}</div>${body}</div>`;
     }
     const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
@@ -3368,7 +3402,7 @@ function breakdownHtml() {
   const head = (extra = '') => `<div class="bdtop"><h1>${title}</h1>${extra}</div>`;
   const wrap = (inner) => `<div class="bd" id="bd-main">${inner}</div>`;
   if (BR.err && !BR.firstsLoaded) return wrap(head() + `<div class="empty-s" id="bdErr">Could not load the lead breakdown: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></div>`);
-  if (!BR.firstsLoaded) return wrap(head() + '<div class="empty-s" id="bdLoading">Loading…</div>');
+  if (!BR.firstsLoaded) return wrap(head() + `<div id="bdLoading">${loader()}</div>`);
   const { total, dims } = bdCompute(), fmt = (n) => n.toLocaleString('en-US');
   const drafts = isMgr() ? BR.rules.filter(r => r.draft).length : 0;
   const ctl = `<span class="spacer"></span><select id="bdRange" aria-label="Date range">${BD_PRESETS.map(x => `<option value="${x[0]}" ${x[0] === BR.preset ? 'selected' : ''}>${x[1]}</option>`).join('')}</select>`
@@ -3582,7 +3616,7 @@ function renderCal() {
     : c.view === 'day' ? d0.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
     : rangeLabel(r.f, r.t);
   $('#calGrid').hidden = $('#calList').hidden = c.view === 'month'; $('#calMonth').hidden = c.view !== 'month';
-  $('#calMsg').innerHTML = c.err ? `<div class="empty-s err">Could not load the calendar: ${esc(c.err)} <button class="btn small" data-calretry>Try again</button></div>` : !e ? '<div class="empty-s">Loading…</div>' : '';
+  $('#calMsg').innerHTML = c.err ? `<div class="empty-s err">Could not load the calendar: ${esc(c.err)} <button class="btn small" data-calretry>Try again</button></div>` : !e ? loader() : '';
   renderReport();
   if (!e) { $('#cal').innerHTML = $('#calList').innerHTML = $('#calMonth').innerHTML = ''; return; }
   const evs = e.rows.filter(a => isActive(a) && (mgr ? !c.agent || a.member_id === c.agent : a.member_id === state.me.id)).map(a => {
@@ -3628,7 +3662,7 @@ function renderReport() {
   const presets = [['7d', 'Last 7 days'], ['month', 'This month'], ['last', 'Last month'], ['custom', 'Custom']];
   let body;
   if (!pr) body = '<div class="empty-s">Pick a start and an end date.</div>';
-  else if (!e) body = c.err ? `<div class="empty-s err">${esc(c.err)}</div>` : '<div class="empty-s">Loading…</div>';
+  else if (!e) body = c.err ? `<div class="empty-s err">${esc(c.err)}</div>` : loader();
   else {
     const st = showingStats(e, pr.f, pr.t);
     const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys()])] : [state.me.id];
@@ -3770,7 +3804,7 @@ function rescheduleLinks(rows) {
 }
 function showingsHtml(p) {
   const e = state.leadAppts.get(p.id);
-  if (!e || (!e.rows && !e.err)) return '<div class="loading-s">Loading…</div>';
+  if (!e || (!e.rows && !e.err)) return loader();
   if (!e.rows) return `<div class="err-s">${esc(e.err)}</div>`;
   if (!e.rows.length) return '<div class="sub">No showings yet.</div>';
   const links = rescheduleLinks(e.rows), now = Date.now();
@@ -3892,7 +3926,7 @@ function renderRenew() {
     <p class="renew-note sub" id="renewHint">Mark as renewed: ${'Use after you confirm it in Zillow. This does not change Zillow.'} Rented hides the listing.</p>
     <div class="toolbar"><select class="btn" id="rAcct" aria-label="Zillow account"><option value="">All accounts</option>${accts.map(a => `<option value="${esc(a)}" ${a === keep ? 'selected' : ''} title="${esc(a)}">${esc(zLocal(a))}</option>`).join('')}</select>
       <label class="contacted"><input type="checkbox" id="rShowDis" ${R.showDismissed ? 'checked' : ''}>Show dismissed</label></div>
-    ${R.err ? `<div class="empty-s" id="renewErr">${esc(R.err)} <button class="btn small" id="renewRetry">Try again</button></div>` : !R.loaded ? '<div class="loading-s">Loading…</div>' : nothing ? '<div class="empty-s" id="renewEmpty">No listings need attention.</div>' : ''}
+    ${R.err ? `<div class="empty-s" id="renewErr">${esc(R.err)} <button class="btn small" id="renewRetry">Try again</button></div>` : !R.loaded ? loader() : nothing ? '<div class="empty-s" id="renewEmpty">No listings need attention.</div>' : ''}
     ${R.loaded && !(nothing) ? `<div class="colstack">${sec('Expiring soon — confirm availability in Zillow', 'renew-expiring', expTable)}${sec('Expired — reactivate in Zillow', 'renew-expired', expdTable)}${R.showDismissed ? sec('Dismissed', 'renew-dismissed', dismissed.length ? disTable : '<div class="empty-s">None.</div>') : ''}</div>` : ''}`;
 }
 // ----- Confirm selected (up to 10 at a time) -----
@@ -4020,7 +4054,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.2';
+const APP_VERSION = '3.3';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -4184,7 +4218,7 @@ const ruleSort = (a, b) => a.area.localeCompare(b.area) || String(a.street || ''
 function pageAreas(S) {
   const head = subHead('Areas', 'A rule names the area for a street, a zip, or both, and can cover a range of house numbers. The most specific rule wins: street + zip, then street, then zip. Within a street, a house-number range beats the plain rule, and the narrower range wins. A draft rule counts like a confirmed one until you confirm it.');
   if (BR.err && !(BR.firstsLoaded && BR.rulesLoaded)) return head + `<div class="empty-s" id="areaErr">${esc(BR.err)} <button class="btn small" id="areaRetry">Try again</button></div>`;
-  if (!BR.firstsLoaded || !BR.rulesLoaded) return head + '<div class="loading-s">Loading…</div>';
+  if (!BR.firstsLoaded || !BR.rulesLoaded) return head + loader();
   const u = unmappedStreets(), names = areaNames();
   const streets = `<div class="section" id="areaStreets"><h4>Streets without a rule <span class="sub">${u.all.toLocaleString('en-US')} in all, the top ${u.top.length} by leads</span></h4>
     ${u.top.map(e => `<div class="row arearow" data-areastreet="${esc(e.street)}"><b class="flabel">${e.street ? esc(e.street) : 'No street'}</b><span class="sub num">${e.zip ? esc(e.zip) + ' · ' : ''}${e.n.toLocaleString('en-US')} lead${e.n === 1 ? '' : 's'}</span><span class="spacer"></span>
@@ -4343,7 +4377,7 @@ function pageTemplates(S) {
   if (T.draft) return pageTplEdit(S, T);
   const head = subHead('Email templates', 'Team templates are for everyone, and managers edit them. An agent\'s own templates are private and read-only here. Blanks like {First name} fill in for each lead.', `<button class="btn primary small" id="tplNew" data-tplnew ${sdis()}>+ New template</button>`);
   if (T.err) return head + `<div class="empty-s" id="tplErr">${esc(T.err)} <button class="btn small" data-tplretry>Try again</button></div>`;
-  if (!T.rows) return head + '<div class="loading-s">Loading…</div>';
+  if (!T.rows) return head + loader();
   return head + `<div class="section"><div class="row" style="margin-bottom:8px"><input class="slname" id="tplQ" style="flex:1;min-width:160px" placeholder="Search templates" value="${esc(T.q)}" aria-label="Search templates" autocomplete="off">
     <span class="seg" role="group" aria-label="Show">${[['all', 'All'], ['team', 'Team'], ['agents', 'Agents\'']].map(([v, t]) => `<button data-tfilter="${v}" aria-pressed="${T.filter === v}">${t}</button>`).join('')}</span></div>
     <div id="tplRows">${tplRowsHtml(T)}</div></div>`;
@@ -4410,7 +4444,7 @@ function goSetPage(pg) {
 function pageSystem(S) {
   const head = subHead('System check', 'Leads come in through each team member\'s lead Gmail. A late check means new leads may be missing.', `<button class="btn small" data-hbrefresh ${S.hbBusy ? 'disabled' : ''}>Refresh</button>`);
   if (S.hbErr) return head + `<div class="empty-s" id="hbErr">${esc(S.hbErr)}</div>`;
-  if (!S.hb) return head + '<div class="loading-s">Checking…</div>';
+  if (!S.hb) return head + loader('Checking…');
   const rows = sysRows(S), bad = rows.filter(r => r.st !== 'ok');
   return head + (rows.length ? `<div class="syscheck ${bad.length ? 'bad' : 'ok'}" id="sysSummary"><b>System check:</b> ${bad.length ? `${rows.length - bad.length} of ${rows.length} lead Gmails OK. ${bad.map(r => esc(r.m.full_name.split(' ')[0])).join(', ')} ${bad.length === 1 ? 'needs' : 'need'} a look.` : `All ${rows.length} lead Gmails checked in the last ${HB_LATE_MIN} minutes.`}</div>` : '')
     + `<div class="section" id="sysList">${rows.map(({ m, h, age, st }) => { const sm = st === 'none' ? '' : hbSummary(h.last_result); return `<div class="sysrow" data-sys="${esc(m.id)}" data-state="${st}"><span class="who">${avatar(m.id, 'sm')}<div style="min-width:0"><div class="name">${esc(m.full_name)}</div><div class="sub">${esc(m.lead_gmail)}</div></div></span>
@@ -4423,7 +4457,7 @@ function renderSettings() {
   const keepFocus = document.activeElement && document.activeElement.id;
   let html;
   if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
-  else if (!S.loaded) html = '<div class="loading-s">Loading…</div>';
+  else if (!S.loaded) html = loader();
   else if (!S.page) html = pageHome(S);
   else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, areas: pageAreas, team: pageTeam, about: pageAbout }[S.page](S);
   const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
