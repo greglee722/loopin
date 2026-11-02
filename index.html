@@ -545,6 +545,11 @@ tr.unread .name { font-weight: 700; }
 .bd .bdtbl tbody tr:nth-child(even) td { background: var(--surface-2); }
 .bd .bdtbl tbody tr:hover td { background: var(--accent-soft); }
 .bd .cnt { text-align: right; margin-left: 0; }
+.bd .bdwide { padding-top: 4px; } .bd .bdwide > .bdbox { display: block; margin: 0 0 16px; }
+.bd .bdscroll { overflow-x: auto; }
+.bd .yrent { display: block; font-size: 12px; font-variant-numeric: tabular-nums; }
+.bd td.gapbad { background: var(--bad-soft) !important; color: var(--bad); font-weight: 600; } .bd td.gapwarn { background: var(--warn-soft) !important; color: var(--warn); font-weight: 600; }
+.bd .gapset { float: right; font-size: 12px; } .bd .gapset input { width: 56px; font: inherit; font-size: 12.5px; padding: 1px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .bd .track { display: block; width: 100%; min-width: 48px; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .bd .fill { display: block; height: 100%; background: var(--accent); }
 .bd .bdtop select, .bd .bdtop input[type=date] { font: inherit; font-size: 13px; font-weight: 400; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
@@ -1101,6 +1106,13 @@ function makeApi(url, key) {
       if (after) q = q.gt('person_id', after);
       return ok(await q);
     },
+    // v3.4 (supabase/18): YGL inventory for the Breakdown. Managers only; the database returns nothing to anyone else.
+    async yglListings(after) {
+      let q = sb.from('ygl_listings').select('ygl_id,street_number,street_name,zip,beds,price,fetched_at').order('ygl_id').limit(PAGE);
+      if (after) q = q.gt('ygl_id', after);
+      return ok(await q);
+    },
+    async yglLastRun() { return ok(await sb.from('ygl_runs').select('ran_at,ok,kept,note').order('ran_at', { ascending: false }).limit(1)); },
   };
 }
 // The test harness sets window.LOOPIN_API first, so no real database is touched in tests.
@@ -1183,7 +1195,7 @@ const busy = new Set();       // ids with a write in flight
 const pend = new Map();       // id -> what the user just asked for, shown until the database answers
 let loadGen = 0;              // changes on sign-out so late pages are dropped
 // v2.8 Lead breakdown and area rules (see "Lead breakdown" below). One object, rebuilt on sign-out.
-const newBR = () => ({ rules: [], rulesLoaded: false, firsts: new Map(), firstsLoaded: false, loading: false, err: '', ver: 0, preset: '7d', from: '', to: '', idx: null });
+const newBR = () => ({ rules: [], rulesLoaded: false, firsts: new Map(), firstsLoaded: false, loading: false, err: '', ver: 0, preset: '7d', from: '', to: '', idx: null, ygl: [], yglRun: null, yglLoaded: false, yglErr: '' });
 let BR = newBR();
 const needsBR = () => state.filters.some(f => f.key === 'area' || f.key === 'beds');
 const waitBR = () => needsBR() && !BR.firstsLoaded;
@@ -3332,7 +3344,7 @@ const brArea = (id) => { const f = BR.firsts.get(id); return f ? f.area : NO_ADD
 const brBeds = (id) => { const f = BR.firsts.get(id); return f ? f.bed : 'Unknown'; };
 const areaNames = () => [...new Set(BR.rules.map(r => r.area))].sort((a, b) => a.localeCompare(b));
 // Rules change: work out every lead's area again (the street, zip and house number stay as they were).
-function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = f.addr ? areaOf(f.street, f.zip, f.no) : NO_ADDR; BR.ver++; }
+function recomputeAreas() { buildAreaIdx(); for (const f of BR.firsts.values()) f.area = f.addr ? areaOf(f.street, f.zip, f.no) : NO_ADDR; for (const l of BR.ygl) l.area = areaOf(l.street, l.zip, l.no); BR.ver++; }
 // Rules and first inquiries load once per session, the first time someone needs them (Breakdown, Settings > Areas, an Area or Bedrooms filter).
 async function loadBreakdown(force) {
   if (!state.me || BR.loading || (BR.firstsLoaded && BR.rulesLoaded && !force)) return;
@@ -3347,7 +3359,23 @@ async function loadBreakdown(force) {
       after = rows[rows.length - 1].person_id;
     }
     if (gen !== loadGen) return;
+    // v3.4: a manager also loads the YGL inventory. A failure here never hides the lead tables.
+    let ygl = [], run = null, yerr = '';
+    if (isMgr()) {
+      try {
+        for (let after = null; ;) {
+          const rows = await api.yglListings(after);
+          if (gen !== loadGen) return;
+          for (const r of rows) { const addr = `${r.street_number || ''} ${r.street_name || ''}`.trim(); ygl.push({ id: r.ygl_id, street: streetKey(addr), zip: r.zip || null, no: houseNoOf(addr), bed: bedBucket(r.beds), price: Number(r.price), at: r.fetched_at, area: NO_RULE }); }
+          if (rows.length < PAGE) break;
+          after = rows[rows.length - 1].ygl_id;
+        }
+        run = (await api.yglLastRun())[0] || null;
+        if (gen !== loadGen) return;
+      } catch (e) { if (gen !== loadGen) return; ygl = []; run = null; yerr = e.message || 'Could not load the YGL inventory.'; }
+    }
     BR.rules = rules; BR.firsts = firsts; BR.rulesLoaded = BR.firstsLoaded = true;
+    BR.ygl = ygl; BR.yglRun = run; BR.yglErr = yerr; BR.yglLoaded = !yerr;
     recomputeAreas();
   } catch (e) { if (gen !== loadGen) return; BR.err = e.message || 'Could not load the lead locations.'; }
   BR.loading = false; refreshBR();
@@ -3397,6 +3425,78 @@ const UNKNOWN_WHY = {
   area: [[NO_ADDR, 'No address: the lead came with no listing address (most are Apartments.com, website and YGL leads).'], [NO_RULE, 'No rule yet: the lead has an address, but no area rule matches it. Add one in Settings › Areas.']],
   beds: [['Unknown', 'Unknown: the lead came with no bedroom count. Zillow sends one on most inquiries; other sources usually don’t.']],
 };
+// ───────── YGL inventory and gaps (v3.4, supabase/18). Managers only. ─────────
+// Two cards under the Breakdown tables. The area of a listing comes from the same area rules as a lead (areaOf), so a rule change moves both.
+const GAP_KEY = 'loopin.gapThreshold', GAP_DEFAULT = 5, YGL_OLD_HOURS = 36;
+function gapPref() { try { const n = parseFloat(localStorage.getItem(GAP_KEY)); return n > 0 ? n : GAP_DEFAULT; } catch (_) { return GAP_DEFAULT; } }
+function setGapPref(v) { try { localStorage.setItem(GAP_KEY, String(v)); return true; } catch (_) { return false; } }
+const YGL_COLS = ['Studio', '1', '2', '3', '4+'];
+const median = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
+// { area -> { 'Studio': [prices], ..., all: [prices] } }. A listing with no bedroom count is only in "all".
+function yglByArea() {
+  const m = new Map();
+  for (const l of BR.ygl) {
+    const e = m.get(l.area) || m.set(l.area, { all: [] }).get(l.area);
+    e.all.push(l.price);
+    if (YGL_COLS.includes(l.bed)) (e[l.bed] = e[l.bed] || []).push(l.price);
+  }
+  return m;
+}
+function yglCell(prices) {
+  if (!prices || !prices.length) return '<td class="num">—</td>';
+  const n = prices.length, avg = Math.round(prices.reduce((t, x) => t + x, 0) / n);
+  return `<td class="num" title="${esc(`Average ${money(avg)} · ${plural(n, 'listing', 'listings')}`)}"><b>${n.toLocaleString('en-US')}</b><span class="yrent ${n < 3 ? 'sub' : ''}">${esc(money(median(prices)))}</span></td>`;
+}
+function yglCardHtml() {
+  if (BR.yglErr) return `<section class="card bdbox" id="yglInv"><h3>YGL inventory</h3><div class="empty-s" id="yglErr">Could not load the YGL inventory: ${esc(BR.yglErr)}</div></section>`;
+  const run = BR.yglRun, n = BR.ygl.length;
+  if (!run && !n) return `<section class="card bdbox" id="yglInv"><h3>YGL inventory</h3><div class="empty-s" id="yglNone">No YGL data yet. The nightly sync saves it after the FUB sync.</div></section>`;
+  const newest = BR.ygl.reduce((t, l) => l.at && (!t || l.at > t) ? l.at : t, null) || (run && run.ran_at);
+  const old = run && (Date.now() - new Date(run.ran_at).getTime()) > YGL_OLD_HOURS * 36e5;
+  const pill = run && !run.ok ? '<span class="pill bad" id="yglPill">Last pull failed</span>' : old ? '<span class="pill warn" id="yglPill">YGL data is old</span>' : '';
+  const when = newest ? new Date(newest).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const by = yglByArea(), areas = [...by.keys()].sort((a, b) => by.get(b).all.length - by.get(a).all.length || a.localeCompare(b));
+  const noBeds = BR.ygl.filter(l => !YGL_COLS.includes(l.bed)).length;
+  return `<section class="card bdbox" id="yglInv"><h3>YGL inventory</h3><p class="sub bdfoot" id="yglAsOf">${when ? `As of ${esc(when)} · ` : ''}${esc(plural(n, 'listing', 'listings'))} ${pill}</p>`
+    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="yglTbl"><thead><tr><th>Area</th>${YGL_COLS.map(c => `<th class="num">${c}</th>`).join('')}<th class="num">Total</th></tr></thead><tbody>${areas.map(a => {
+      const e = by.get(a);
+      return `<tr data-yarea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${YGL_COLS.map(c => yglCell(e[c])).join('')}${yglCell(e.all)}</tr>`;
+    }).join('')}</tbody></table></div>` : '<div class="empty-s">No listings.</div>')
+    + (noBeds ? `<p class="sub bdfoot">${esc(plural(noBeds, 'listing', 'listings'))} with no bedroom count ${noBeds === 1 ? 'is' : 'are'} only in Total.</p>` : '') + '</section>';
+}
+const GAP_COLS = ['Studio / 1', '2', '3', '4+'], gapBed = (b) => b === 'Studio' || b === '1' ? 'Studio / 1' : b;
+// Leads from the last 30 days against the inventory today, whatever range the Breakdown is set to.
+function gapCompute() {
+  const [from, to] = fwindow({ key: 'created', op: 'between', rel: [-29, 0] });
+  const m = new Map(), cell = (a, c) => { const e = m.get(a) || m.set(a, {}).get(a); return e[c] || (e[c] = { leads: 0, inv: 0 }); };
+  let unknown = 0;
+  for (const p of all) {
+    const ck = p._ck;
+    if (p.merged_into || !ck || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
+    const a = brArea(p.id); if (a === NO_ADDR) continue;
+    const b = brBeds(p.id);
+    if (b === 'Unknown') { unknown++; continue; }
+    cell(a, gapBed(b)).leads++;
+  }
+  for (const l of BR.ygl) if (YGL_COLS.includes(l.bed)) cell(l.area, gapBed(l.bed)).inv++;
+  return { m, unknown };
+}
+function gapCardHtml() {
+  const th = gapPref(), { m, unknown } = gapCompute();
+  const tot = (a) => GAP_COLS.reduce((t, c) => t + ((m.get(a)[c] || {}).leads || 0), 0);
+  const areas = [...m.keys()].sort((a, b) => tot(b) - tot(a) || a.localeCompare(b));
+  const td = (e) => {
+    if (!e || (!e.leads && !e.inv)) return '<td class="num">—</td>';
+    const bad = e.leads > 0 && e.inv === 0, warn = !bad && e.inv > 0 && e.leads / e.inv > th;
+    const why = bad ? 'Gap: leads and no listings' : warn ? `Gap: more than ${th} leads per listing` : '';
+    return `<td class="num ${bad ? 'gapbad' : warn ? 'gapwarn' : ''}" ${why ? `title="${esc(why)}"` : ''}>${esc(plural(e.leads, 'lead', 'leads'))} · ${esc(plural(e.inv, 'listing', 'listings'))}${why ? `<span class="vh"> (${esc(why)})</span>` : ''}</td>`;
+  };
+  return `<section class="card bdbox" id="yglGap"><h3>Leads vs inventory</h3><p class="sub bdfoot">New leads in the last 30 days vs YGL listings today
+    <label class="gapset">Flag above <input type="number" id="bdGap" min="0.5" step="0.5" value="${esc(th)}" aria-label="Leads per listing before a cell turns amber"> leads per listing</label></p>`
+    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="gapTbl"><thead><tr><th>Area</th>${GAP_COLS.map(c => `<th class="num">${c}</th>`).join('')}</tr></thead><tbody>${areas.map(a =>
+      `<tr data-garea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${GAP_COLS.map(c => td(m.get(a)[c])).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="empty-s">No leads or listings.</div>')
+    + `<p class="sub bdfoot" id="gapUnknown">${esc(plural(unknown, 'lead', 'leads'))} with unknown bedrooms ${unknown === 1 ? 'is' : 'are'} not in this table.</p></section>`;
+}
 function breakdownHtml() {
   const title = isMgr() ? 'Lead breakdown' : 'My lead breakdown';
   const head = (extra = '') => `<div class="bdtop"><h1>${title}</h1>${extra}</div>`;
@@ -3419,7 +3519,7 @@ function breakdownHtml() {
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
-  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div>`);
+  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div>` + (isMgr() ? `<div class="bdwide">${yglCardHtml()}${gapCardHtml()}</div>` : ''));
 }
 // Redraw only this tab.
 function bdRender() { const el = $('#bd-main'); if (el) el.outerHTML = breakdownHtml(); else $('#breakdown').innerHTML = breakdownHtml(); }
@@ -3487,6 +3587,7 @@ $('#breakdown').addEventListener('change', e => {
     bdRender(); return;
   }
   if (t.id === 'bdFrom' || t.id === 'bdTo') { BR[t.id === 'bdFrom' ? 'from' : 'to'] = t.value; bdRender(); }
+  if (t.id === 'bdGap') { const n = parseFloat(t.value); if (n > 0) setGapPref(n); bdRender(); }
 });
 
 // ───────── Calendar, showings report and cancel (v2.2) ─────────
@@ -4054,7 +4155,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.3';
+const APP_VERSION = '3.4';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
