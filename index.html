@@ -920,7 +920,7 @@ const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publ
 const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,custom_auto,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
-const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by';   // v3.6: lead_options
+const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by,note';   // v3.6: lead_options; v3.7: note (supabase/21)
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
@@ -2385,7 +2385,7 @@ function onChange(e) {
   if (t.dataset.sel) toggleSel(t.dataset.sel, t.checked);
   else if (t.dataset.contact) toggleContacted(t.dataset.contact, t.checked);
   else if (t.dataset.stage) changeStage(t.dataset.stage, +t.value);
-  else if (t.dataset.optstatus) optStatus(t.dataset.optstatus, t.value);
+  else if (t.dataset.optstatus) { if (t.value === 'shared') optStatus(t.dataset.optstatus, t.value); else { OPT.st = t.value; setEdit('optst:' + t.dataset.optstatus); } }
   else if (t.dataset.yr) optYr(t);
 }
 async function toggleContacted(id, on) {
@@ -2782,6 +2782,7 @@ async function saveEdit() {
     const r = $('#eReason').value; if (!r) return editErr('Pick a reason.');
     return done(await editWrite(p, () => api.updatePerson(p.id, { nonworkable_reason: r })));
   }
+  if (kind === 'optst') { const r = await optStatus(arg, OPT.st, $('#oStNote').value.trim()); if (state.open === p.id) done(r); return; }
   if (kind === 'opt') { const r = arg === 'new' ? await optAdd(p) : await optSave(p, arg); if (state.open === p.id) done(r); return; }
   if (kind === 'note') {
     const body = $('#eNote').value.trim(), n = state.detail && state.detail.notes.find(x => String(x.id) === arg);
@@ -2876,8 +2877,16 @@ function parseOptionLine(line) {
     if (/fee/.test(l)) fee = /(doesn.?t|does not|don.?t|no)\b.*pay|no (broker )?fee|not pay/.test(l) ? 'none' : /half/.test(l) ? 'half' : 'full';
     else if (/free|offer|discount|credit|off\b/.test(l)) offer = t.replace(/^offering\s+/i, '').replace(/^\w/, c => c.toUpperCase());
   });
-  const addr = rest.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().replace(/(^|\s)([a-z])/g, (m, s1, c) => s1 + c.toUpperCase());
+  const addr = addrCase(rest.replace(/\([^)]*\)/g, ''));
   return { addr, url, ygl, lid, fee, offer };
+}
+// v3.7: one letter case for every address, typed or from YGL. "pETerboroUGH st" → "Peterborough St"; "#12b" → "#12B"; "1st" stays "1st"; "o'brien" → "O'Brien".
+function addrCase(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim().split(' ').map(w =>
+    w[0] === '#' ? w.toUpperCase()
+    : /^\d+(st|nd|rd|th)\b/i.test(w) ? w.toLowerCase()
+    : /\d/.test(w) ? w.toUpperCase()
+    : w.toLowerCase().replace(/(^|[-'’])([a-z])/g, (m, s1, c) => s1 + c.toUpperCase())).join(' ');
 }
 // A pasted list, one listing per line. "OP" / "options picked" / "picked" starts the picked part. A line with no link and no street number is a heading and is skipped. A repeat (same YGL id or same address) is one row.
 function parsePasteList(text) {
@@ -2908,7 +2917,7 @@ function optRowHtml(o, can, dis) {
   const addr = web ? `<a class="maillink" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.address)} ↗</a>` : esc(o.address);
   const by = o.shared_by ? memberName(o.shared_by) : '';
   const meta = [o.rent != null ? money(o.rent) + '/mo' : '', o.beds ? esc(o.beds) : '', o.available_on ? 'avail. ' + esc(fmtDate(o.available_on)) : '', `shared ${esc(fmtShort(o.shared_at))}${by ? ' by ' + esc(by) : ''}`].filter(Boolean).join(' · ');
-  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}<div class="sub">${meta}</div></div>
+  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}<div class="sub">${meta}</div>${o.note ? `<div class="opt-note" style="white-space:pre-wrap;margin-top:2px">${esc(o.note)}</div>` : ''}</div>
     ${can ? `<button class="pen" data-edit="opt:${esc(o.id)}" aria-label="Edit ${esc(o.address)}" ${dis}>${penSvg}</button>` : ''}
     <select class="optsel ${o.status === 'not_interested' ? 'passed' : esc(o.status)}" data-optstatus="${esc(o.id)}" aria-label="Status of ${esc(o.address)}" ${can ? dis : 'disabled'}>${Object.entries(OPT_STATUS).map(([k, t]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
     ${can ? `<button class="x" data-del="option" data-id="${esc(o.id)}" aria-label="Remove ${esc(o.address)}" ${dis}>×</button>` : ''}</div>`;
@@ -2919,7 +2928,12 @@ function optFormHtml(o, dis, isNew) {
   return editbox(`<div class="optedit"><input id="oAddr" data-oe="addr" value="${esc(v.address || '')}" placeholder="${isNew ? 'Address or YGL link' : 'Address'}" aria-label="${isNew ? 'Address or YGL link' : 'Address'}">
     <input id="oRent" type="number" min="0" step="any" value="${v.rent != null ? esc(v.rent) : ''}" placeholder="$/mo" aria-label="Rent">
     <select id="oBeds" aria-label="Bedrooms"><option value="">Beds</option>${OPT_BEDS.map(b => `<option ${v.beds === b ? 'selected' : ''}>${b}</option>`).join('')}</select>
-    ${optFeeSel(v.broker_fee, 'id="oFee" aria-label="Broker fee"')}<input id="oOffer" data-oe="offer" value="${esc(v.offer || '')}" placeholder="Offer, e.g. 1 free month" aria-label="Offer"></div>`, dis).replace('>Save<', `>${isNew ? 'Add option' : 'Save'}<`);
+    ${optFeeSel(v.broker_fee, 'id="oFee" aria-label="Broker fee"')}<input id="oOffer" data-oe="offer" value="${esc(v.offer || '')}" placeholder="Offer, e.g. 1 free month" aria-label="Offer">
+    <textarea id="oNote" style="flex:1 1 100%" placeholder="Notes, e.g. picked for the stainless steel appliances" aria-label="Notes">${esc(v.note || '')}</textarea></div>`, dis).replace('>Save<', `>${isNew ? 'Add option' : 'Save'}<`);
+}
+// v3.7: Picked / Not interested asks why first (optional). The answer becomes the option's note.
+function optStatusHtml(o, dis) {
+  return `<div class="opt" data-opt="${esc(o.id)}" style="display:block"><b>${esc(OPT_STATUS[OPT.st])}: ${esc(o.address)}</b>${editbox(`<textarea id="oStNote" placeholder="Why? (optional), e.g. ${OPT.st === 'picked' ? 'stainless steel appliances' : 'no dishwasher'}" aria-label="Why ${esc(OPT_STATUS[OPT.st])}">${esc(o.note || '')}</textarea>`, dis)}</div>`;
 }
 function optPasteHtml(dis) {
   return `<div class="editbox"><div class="sub">Paste one listing per line, like "https://ygl.is/33ou/148542474 11 Peterborough St #12 (no broker fee) (1 free month)". Lines under "OP" are marked Picked. A line with no link keeps the address as typed.</div>
@@ -2947,9 +2961,9 @@ function optionsHtml(p, d) {
   const add = !can ? '' : state.edit === 'opt:new' ? optFormHtml(null, dis, true) : state.edit === 'optpaste' ? optPasteHtml(dis) : state.edit === 'optreview' ? optReviewHtml(dis)
     : `<div class="row" style="margin-top:8px"><button class="btn small soft" data-edit="opt:new" ${dis}>+ Add option</button><button class="btn small soft" data-edit="optpaste" ${dis}>Paste a list</button></div>`;
   return `<div class="sub" id="optSummary" style="margin-bottom:4px">${opts.length ? `${picked} picked of ${opts.length} shared` : 'Add the listings you send this renter. Mark the ones they pick.'}</div>`
-    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : optRowHtml(o, can, dis)).join('') + add;
+    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optst:' + o.id && can && OPT.st ? optStatusHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add;
 }
-const readOptForm = () => ({ address: $('#oAddr').value.trim(), rent: $('#oRent').value.trim(), beds: $('#oBeds').value, fee: $('#oFee').value, offer: $('#oOffer').value.trim() });
+const readOptForm = () => ({ address: $('#oAddr').value.trim(), rent: $('#oRent').value.trim(), beds: $('#oBeds').value, fee: $('#oFee').value, offer: $('#oOffer').value.trim(), note: $('#oNote').value.trim() });
 // One options write at a time per lead. A failure keeps the form filled and shows the message (in the form, else as a toast). If the user moved to another lead meanwhile, nothing on the new lead is touched.
 async function optRun(p, fn) {
   if (!canEdit(p)) { toast(readOnlyWhy(p)); return false; }
@@ -2970,7 +2984,7 @@ async function optAdd(p) {
   const rent = f.rent === '' ? null : Number(f.rent);
   if (rent != null && !(rent >= 0)) { editErr('Rent must be a number.'); return false; }
   const row = { person_id: id, address: q.addr, rent, beds: f.beds || null, available_on: OPT.avail || null, url: q.url || OPT.url || null, ygl_listing_id: (q.ygl && q.lid) || OPT.lid || null,
-    broker_fee: f.fee || q.fee || null, offer: f.offer || q.offer || '', status: 'shared', shared_by: state.me.id };
+    broker_fee: f.fee || q.fee || null, offer: f.offer || q.offer || '', note: f.note, status: 'shared', shared_by: state.me.id };
   const ok = await optRun(p, async () => { optMerge(id, await api.addOptions([row])); });
   if (ok && state.open === id) resetOpt();
   return ok;
@@ -2980,7 +2994,7 @@ async function optSave(p, oid) {
   if (!f.address) { editErr('The address is required.'); return false; }
   if (rent != null && !(rent >= 0)) { editErr('Rent must be a number.'); return false; }
   return optRun(p, async () => {
-    const r = await api.updateOption(oid, { address: f.address, rent, beds: f.beds || null, broker_fee: f.fee || null, offer: f.offer });
+    const r = await api.updateOption(oid, { address: addrCase(f.address), rent, beds: f.beds || null, broker_fee: f.fee || null, offer: f.offer, note: f.note });
     if (state.open === id && state.detail) { const i = state.detail.options.findIndex(x => x.id === oid); if (i >= 0) state.detail.options[i] = r; }
   });
 }
@@ -2992,21 +3006,22 @@ function askDeleteOpt(p, oid) {
     await optRun(p, async () => { await api.deleteOption(oid); if (state.open === p.id && state.detail) state.detail.options = state.detail.options.filter(x => x.id !== oid); });
   };
 }
-// Status select: Shared / Picked / Not interested. Picked and Not interested also write a system note. If the note fails the status stays and a toast says so.
-async function optStatus(oid, status) {
+// Status select: Shared / Picked / Not interested. Shared saves at once; Picked and Not interested first ask why (optStatusHtml), save the answer as the option's note, and write a system note ("Not interested in 24 Queensberry St: no dishwasher"). If the system note fails the status stays and a toast says so.
+async function optStatus(oid, status, note) {
   const p = byId.get(state.open), id = state.open, o = state.detail && state.detail.options.find(x => x.id === oid);
-  if (!p || !o || !OPT_STATUS[status] || o.status === status) { renderPanel(); return; }
-  if (!canEdit(p)) { toast(readOnlyWhy(p)); renderPanel(); return; }
+  if (!p || !o || !OPT_STATUS[status] || (o.status === status && note === undefined)) { renderPanel(); return false; }
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); renderPanel(); return false; }
   const ok = await optRun(p, async () => {
-    const r = await api.updateOption(oid, { status });
+    const r = await api.updateOption(oid, note === undefined ? { status } : { status, note });
     if (state.open === id && state.detail) Object.assign(o, r);
     if (status === 'shared') return;
     try {
-      const note = await api.addNote(id, state.me.id, (status === 'picked' ? 'Picked ' : 'Not interested in ') + o.address, 'system');
-      if (state.open === id && state.detail) state.detail.notes.unshift(note);
+      const note2 = await api.addNote(id, state.me.id, (status === 'picked' ? 'Picked ' : 'Not interested in ') + o.address + (note ? ': ' + note : ''), 'system');
+      if (state.open === id && state.detail) state.detail.notes.unshift(note2);
     } catch (e) { toast('Status saved, but the activity note was not: ' + (e.message || 'error')); }
   });
   if (ok) await reread(id);
+  return ok;
 }
 // Paste a YGL link in the address box: address, rent and beds fill from YGL (pl_ygl_lookup); the date and link are kept for the save. Not found: the link stays and a toast says to type the address.
 async function yglFill() {
@@ -3019,9 +3034,9 @@ async function yglFill() {
   OPT.url = q.url; OPT.lid = q.lid; OPT.avail = f ? yglDate(f.available_date) : null;
   if (!f) { toast('Not in tonight\'s YGL copy. Fill in the address by hand.'); return; }
   const beds = bedsLabel(f.beds);
-  a.value = f.address; OPT.len = a.value.length; $('#oRent').value = f.price != null ? f.price : ''; $('#oBeds').value = beds;
+  a.value = addrCase(f.address); OPT.len = a.value.length; $('#oRent').value = f.price != null ? f.price : ''; $('#oBeds').value = beds;
   if (q.fee) $('#oFee').value = q.fee; if (q.offer) $('#oOffer').value = q.offer;
-  toast(`Filled from YGL: ${f.address}${f.price != null ? ', ' + money(f.price) + '/mo' : ''}${beds ? ', ' + beds : ''}. Add the fee and offer.`); $('#oFee').focus();
+  toast(`Filled from YGL: ${a.value}${f.price != null ? ', ' + money(f.price) + '/mo' : ''}${beds ? ', ' + beds : ''}. Add the fee and offer.`); $('#oFee').focus();
 }
 // Look up listings: one pl_ygl_lookup call for every id, then the review table. YGL values replace typed address text; a row already on the lead starts unchecked.
 async function optLookup() {
@@ -3040,7 +3055,7 @@ async function optLookup() {
   if (err) { renderPanel(); editErr(err); return; }   // the paste box stays filled
   rows.forEach(r => {
     const f = r.lid ? found.get(r.lid) : null;
-    if (f) { r.addr = f.address; r.rent = f.price != null ? f.price : null; r.beds = bedsLabel(f.beds); r.avail = yglDate(f.available_date); r.found = true; }
+    if (f) { r.addr = addrCase(f.address); r.rent = f.price != null ? f.price : null; r.beds = bedsLabel(f.beds); r.avail = yglDate(f.available_date); r.found = true; }
     r.dup = d.options.some(o => (r.lid && String(o.ygl_listing_id) === r.lid) || (r.url && o.url === r.url));
     r.inc = !r.dup;
   });
@@ -3050,7 +3065,7 @@ async function optReviewSave() {
   const p = byId.get(state.open), id = state.open, add = (OPT.rows || []).filter(r => r.inc); if (!p) return;
   if (!add.length) { editErr('Check at least one listing.'); return; }
   if (add.some(r => !String(r.addr).trim())) { editErr('Every checked listing needs an address.'); return; }
-  const rows = add.map(r => ({ person_id: id, address: r.addr.trim(), rent: r.rent, beds: r.beds || null, available_on: r.avail || null, url: r.url || null, ygl_listing_id: r.lid || null,
+  const rows = add.map(r => ({ person_id: id, address: addrCase(r.addr), rent: r.rent, beds: r.beds || null, available_on: r.avail || null, url: r.url || null, ygl_listing_id: r.lid || null,
     broker_fee: r.fee || null, offer: r.offer.trim(), status: r.picked ? 'picked' : 'shared', shared_by: state.me.id }));
   const ok = await optRun(p, async () => { optMerge(id, await api.addOptions(rows)); });
   if (ok && state.open === id) { resetOpt(); state.edit = null; renderPanel(); toast(`Added ${rows.length} option${rows.length === 1 ? '' : 's'}${rows.some(r => r.status === 'picked') ? `, ${rows.filter(r => r.status === 'picked').length} picked` : ''}.`); }
@@ -4433,7 +4448,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.6';
+const APP_VERSION = '3.7';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
