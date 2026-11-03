@@ -546,9 +546,11 @@ tr.unread .name { font-weight: 700; }
 .bd .bdtbl tbody tr:hover td { background: var(--accent-soft); }
 .bd .cnt { text-align: right; margin-left: 0; }
 .bd .bdwide { padding-top: 4px; } .bd .bdwide > .bdbox { display: block; margin: 0 0 16px; }
-.bd .bdscroll { overflow-x: auto; }
+.bd .bdscroll { overflow-x: auto; position: relative; }   /* relative: the hidden .vh text is absolute and must not widen the page */
 .bd .yrent { display: block; font-size: 12px; font-variant-numeric: tabular-nums; }
-.bd td.gapbad { background: var(--bad-soft) !important; color: var(--bad); font-weight: 600; } .bd td.gapwarn { background: var(--warn-soft) !important; color: var(--warn); font-weight: 600; }
+.bd td.gapbad { background: var(--bad-soft) !important; color: var(--bad); font-weight: 600; } .bd td.gapwarn { background: var(--warn-soft) !important; color: var(--warn); font-weight: 600; } .bd td.gapok { background: var(--ok-soft) !important; color: var(--ok); font-weight: 600; }
+.bd .gaplists { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--line); } .bd .gaplist h4 { margin: 0 0 4px; font-size: 13px; } .bd .gaplist ol { margin: 0; padding-left: 18px; font-size: 13px; } .bd .gaplist p { margin: 0; }
+@media (max-width: 700px) { .bd .gaplists { grid-template-columns: 1fr; } }
 .bd .gapset { float: right; font-size: 12px; } .bd .gapset input { width: 56px; font: inherit; font-size: 12.5px; padding: 1px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .bd .track { display: block; width: 100%; min-width: 48px; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .bd .fill { display: block; height: 100%; background: var(--accent); }
@@ -3397,21 +3399,23 @@ function bdFilter() {
   return { key: 'created', op: 'between', ...(dateKey(BR.from) ? { from: dateKey(BR.from) } : {}), ...(dateKey(BR.to) ? { to: dateKey(BR.to) } : {}) };
 }
 const bdWindow = () => fwindow(bdFilter());
-const BD_DIMS = [['agent', 'By agent'], ['source', 'By source'], ['zacct', 'By Zillow account'], ['area', 'By area'], ['beds', 'By bedrooms']];
+const BD_DIMS = [['agent', 'By agent'], ['source', 'By source'], ['zacct', 'By Zillow account']];   // v3.5: area and bedrooms are one table, bdAreaBeds
 // An agent counts only the leads they own (the database also shows them leads they work on with someone else), and has no "By agent" table.
 const bdDims = () => BD_DIMS.filter(d => (d[0] !== 'agent' || isMgr()) && (d[0] !== 'zacct' || state.zOn));
 function bdCompute() {
   const [from, to] = bdWindow(), dims = Object.fromEntries(BD_DIMS.map(d => [d[0], new Map()]));
   const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
   let total = 0;
+  const ab = new Map();   // v3.5: area -> { n: all its leads, Studio: n, '1': n, ..., Unknown: n }
   for (const p of all) {
     const ck = p._ck;
     if (p.merged_into || !ck || (!isMgr() && p.owner_id !== state.me.id) || (from !== '' && ck < from) || (to !== '' && ck > to)) continue;
     total++;
     bump(dims.agent, p.owner_id || NO_AGENT); bump(dims.source, (p.source || '').trim()); if (/^zillow/i.test(p.source || '')) bump(dims.zacct, p.zillow_account || '');   // only Zillow leads have an account
-    bump(dims.area, brArea(p.id)); bump(dims.beds, brBeds(p.id));
+    const a = brArea(p.id), b = brBeds(p.id), r = ab.get(a) || ab.set(a, { n: 0 }).get(a);
+    r.n++; r[b] = (r[b] || 0) + 1;
   }
-  return { total, dims };
+  return { total, dims, ab };
 }
 function bdLabel(dim, v) {
   if (dim === 'agent') return v === NO_AGENT ? 'Unassigned' : (memberName(v) || 'A former member');
@@ -3419,11 +3423,12 @@ function bdLabel(dim, v) {
   if (dim === 'zacct') return v ? zLocal(v) : 'Not captured yet';   // the account comes from the lead email, read only in connected Gmails
   return v;
 }
+// Column headers for a bedroom bucket (v3.5), the same in the lead, inventory and gap tables.
+const BED_HEAD = { Studio: 'Studio', '1': '1 Bedroom', '2': '2 Bedrooms', '3': '3 Bedrooms', '4+': '4+ Bedrooms', Unknown: 'Unknown' };
 // Why a lead lands in these rows (checked 2026-10-30: every Zillow lead had an address; the leads with none were Apartments.com,
 // website and YGL leads, whose FUB record has no listing, plus Zillow inquiries that came without a bedroom count).
 const UNKNOWN_WHY = {
   area: [[NO_ADDR, 'No address: the lead came with no listing address (most are Apartments.com, website and YGL leads).'], [NO_RULE, 'No rule yet: the lead has an address, but no area rule matches it. Add one in Settings › Areas.']],
-  beds: [['Unknown', 'Unknown: the lead came with no bedroom count. Zillow sends one on most inquiries; other sources usually don’t.']],
 };
 // ───────── YGL inventory and gaps (v3.4, supabase/18). Managers only. ─────────
 // Two cards under the Breakdown tables. The area of a listing comes from the same area rules as a lead (areaOf), so a rule change moves both.
@@ -3432,7 +3437,7 @@ function gapPref() { try { const n = parseFloat(localStorage.getItem(GAP_KEY)); 
 function setGapPref(v) { try { localStorage.setItem(GAP_KEY, String(v)); return true; } catch (_) { return false; } }
 const YGL_COLS = ['Studio', '1', '2', '3', '4+'];
 const median = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
-// { area -> { 'Studio': [prices], ..., all: [prices] } }. A listing with no bedroom count is only in "all".
+// { area -> { 'Studio': [prices], ..., all: [prices] } }. A listing with no bedroom count is only in "all" (the row order).
 function yglByArea() {
   const m = new Map();
   for (const l of BR.ygl) {
@@ -3456,15 +3461,16 @@ function yglCardHtml() {
   const pill = run && !run.ok ? '<span class="pill bad" id="yglPill">Last pull failed</span>' : old ? '<span class="pill warn" id="yglPill">YGL data is old</span>' : '';
   const when = newest ? new Date(newest).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   const by = yglByArea(), areas = [...by.keys()].sort((a, b) => by.get(b).all.length - by.get(a).all.length || a.localeCompare(b));
-  const noBeds = BR.ygl.filter(l => !YGL_COLS.includes(l.bed)).length;
   return `<section class="card bdbox" id="yglInv"><h3>YGL inventory</h3><p class="sub bdfoot" id="yglAsOf">${when ? `As of ${esc(when)} · ` : ''}${esc(plural(n, 'listing', 'listings'))} ${pill}</p>`
-    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="yglTbl"><thead><tr><th>Area</th>${YGL_COLS.map(c => `<th class="num">${c}</th>`).join('')}<th class="num">Total</th></tr></thead><tbody>${areas.map(a => {
+    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="yglTbl"><thead><tr><th>Area</th>${YGL_COLS.map(c => `<th class="num">${BED_HEAD[c]}</th>`).join('')}</tr></thead><tbody>${areas.map(a => {
       const e = by.get(a);
-      return `<tr data-yarea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${YGL_COLS.map(c => yglCell(e[c])).join('')}${yglCell(e.all)}</tr>`;
+      return `<tr data-yarea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${YGL_COLS.map(c => yglCell(e[c])).join('')}</tr>`;
     }).join('')}</tbody></table></div>` : '<div class="empty-s">No listings.</div>')
-    + (noBeds ? `<p class="sub bdfoot">${esc(plural(noBeds, 'listing', 'listings'))} with no bedroom count ${noBeds === 1 ? 'is' : 'are'} only in Total.</p>` : '') + '</section>';
+    + (areas.length ? '<p class="sub bdfoot" id="yglPriceNote">Price = median monthly rent (the middle listing). Hover a cell for the average.</p>' : '') + '</section>';
 }
 const GAP_COLS = ['Studio / 1', '2', '3', '4+'], gapBed = (b) => b === 'Studio' || b === '1' ? 'Studio / 1' : b;
+const GAP_HEAD = { 'Studio / 1': 'Studio / 1 Bedroom', '2': '2 Bedrooms', '3': '3 Bedrooms', '4+': '4+ Bedrooms' };
+const GAP_ROOM = 5;   // "Room for ads" needs at least this many listings (Greg 2026-11-02)
 // Leads from the last 30 days against the inventory today, whatever range the Breakdown is set to.
 function gapCompute() {
   const [from, to] = fwindow({ key: 'created', op: 'between', rel: [-29, 0] });
@@ -3481,21 +3487,51 @@ function gapCompute() {
   for (const l of BR.ygl) if (YGL_COLS.includes(l.bed)) cell(l.area, gapBed(l.bed)).inv++;
   return { m, unknown };
 }
+// v3.5: one status per cell, first match wins. '' = nothing there.
+function gapStatus(e, th) {
+  if (!e || (!e.leads && !e.inv)) return '';
+  if (e.leads > 0 && e.inv === 0) return 'No inventory';
+  if (e.inv > 0 && e.leads / e.inv > th) return 'Tight';
+  if (e.inv >= GAP_ROOM && e.leads < e.inv) return 'Room for ads';
+  return 'Covered';
+}
+const GAP_CLS = { 'No inventory': 'gapbad', 'Tight': 'gapwarn', 'Room for ads': 'gapok', 'Covered': '' };
 function gapCardHtml() {
   const th = gapPref(), { m, unknown } = gapCompute();
   const tot = (a) => GAP_COLS.reduce((t, c) => t + ((m.get(a)[c] || {}).leads || 0), 0);
   const areas = [...m.keys()].sort((a, b) => tot(b) - tot(a) || a.localeCompare(b));
+  const counts = (e) => `${plural(e.leads, 'lead', 'leads')}, ${plural(e.inv, 'listing', 'listings')}`;
   const td = (e) => {
-    if (!e || (!e.leads && !e.inv)) return '<td class="num">—</td>';
-    const bad = e.leads > 0 && e.inv === 0, warn = !bad && e.inv > 0 && e.leads / e.inv > th;
-    const why = bad ? 'Gap: leads and no listings' : warn ? `Gap: more than ${th} leads per listing` : '';
-    return `<td class="num ${bad ? 'gapbad' : warn ? 'gapwarn' : ''}" ${why ? `title="${esc(why)}"` : ''}>${esc(plural(e.leads, 'lead', 'leads'))} · ${esc(plural(e.inv, 'listing', 'listings'))}${why ? `<span class="vh"> (${esc(why)})</span>` : ''}</td>`;
+    const st = gapStatus(e, th);
+    if (!st) return '<td class="num">—</td>';
+    return `<td class="num ${GAP_CLS[st]}" title="${esc(counts(e))}">${esc(st)}<span class="vh"> (${esc(counts(e))})</span></td>`;
   };
+  // Two ranked lists from the same cells: where leads outrun listings, and where listings outrun leads. Top 5 each.
+  const cells = [];
+  for (const a of areas) GAP_COLS.forEach((c, i) => { const e = m.get(a)[c], st = gapStatus(e, th); if (st) cells.push({ a, c, i, e, st }); });
+  const rank = (list, gap, line) => list.sort((x, y) => gap(y) - gap(x) || x.a.localeCompare(y.a) || x.i - y.i).slice(0, 5).map(x => `<li>${esc(x.a)} · ${esc(GAP_HEAD[x.c])}: ${esc(line(x.e))}</li>`).join('');
+  const need = rank(cells.filter(x => x.st === 'No inventory' || x.st === 'Tight'), x => x.e.leads - x.e.inv, counts);
+  const room = rank(cells.filter(x => x.st === 'Room for ads'), x => x.e.inv - x.e.leads, e => `${plural(e.inv, 'listing', 'listings')}, ${plural(e.leads, 'lead', 'leads')}`);
+  const list = (id, title, html) => `<div class="gaplist" id="${id}"><h4>${title}</h4>${html ? `<ol>${html}</ol>` : '<p class="sub">None right now.</p>'}</div>`;
   return `<section class="card bdbox" id="yglGap"><h3>Leads vs inventory</h3><p class="sub bdfoot">New leads in the last 30 days vs YGL listings today
     <label class="gapset">Flag above <input type="number" id="bdGap" min="0.5" step="0.5" value="${esc(th)}" aria-label="Leads per listing before a cell turns amber"> leads per listing</label></p>`
-    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="gapTbl"><thead><tr><th>Area</th>${GAP_COLS.map(c => `<th class="num">${c}</th>`).join('')}</tr></thead><tbody>${areas.map(a =>
+    + `<div class="gaplists">${list('gapNeed', 'Needs inventory', need)}${list('gapRoom', 'Room for more ads', room)}</div>`
+    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="gapTbl"><thead><tr><th>Area</th>${GAP_COLS.map(c => `<th class="num">${GAP_HEAD[c]}</th>`).join('')}</tr></thead><tbody>${areas.map(a =>
       `<tr data-garea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${GAP_COLS.map(c => td(m.get(a)[c])).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="empty-s">No leads or listings.</div>')
+    + `<p class="sub bdfoot" id="gapLegend"><span class="pill bad">No inventory</span> leads, no listings · <span class="pill warn">Tight</span> more than ${esc(th)} leads per listing · <span class="pill ok">Room for ads</span> ${GAP_ROOM}+ listings and fewer leads than listings · <span class="pill">Covered</span> anything else</p>`
     + `<p class="sub bdfoot" id="gapUnknown">${esc(plural(unknown, 'lead', 'leads'))} with unknown bedrooms ${unknown === 1 ? 'is' : 'are'} not in this table.</p></section>`;
+}
+// v3.5: one table for the area and the bedroom count. Rows are areas (most leads first), columns are bedroom buckets, plus Unknown and Total.
+const AB_COLS = ['Studio', '1', '2', '3', '4+', 'Unknown'];
+function bdAreaBedsHtml(ab) {
+  const fmt = (n) => n.toLocaleString('en-US');
+  const rows = [...ab.entries()].sort((x, y) => y[1].n - x[1].n || x[0].localeCompare(y[0]));
+  const cell = (a, b, n) => n ? `<td class="num"><button class="cnt num" data-bdrow="area" data-bdval="${esc(a)}" data-bdbed="${esc(b)}" tabindex="-1" title="Open these leads in People">${fmt(n)}</button></td>` : '<td class="num">—</td>';
+  const notes = (UNKNOWN_WHY.area || []).filter(w => ab.has(w[0])).map(w => `<p class="sub bdfoot">${esc(w[1])}</p>`).join('');
+  return `<section class="card bdbox" id="bdAreaBeds" data-bddim="areabeds"><h3>Leads by area and bedrooms</h3>`
+    + (rows.length ? `<div class="bdscroll"><table class="bdtbl"><thead><tr><th>Area</th>${AB_COLS.map(c => `<th class="num">${BED_HEAD[c]}</th>`).join('')}<th class="num">Total</th></tr></thead><tbody>${rows.map(([a, r]) =>
+      `<tr data-barea="${esc(a)}"><td><button class="agentlink" data-bdrow="area" data-bdval="${esc(a)}" title="Open these leads in People">${esc(a)}</button>${a === NO_RULE && isMgr() ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${AB_COLS.map(c => cell(a, c, r[c] || 0)).join('')}<td class="num"><button class="cnt num tot" data-bdrow="area" data-bdval="${esc(a)}" tabindex="-1" title="Open these leads in People">${fmt(r.n)}</button></td></tr>`).join('')}</tbody></table></div>${notes}` : '<div class="empty-s">No new leads in this range.</div>')
+    + '</section>';
 }
 function breakdownHtml() {
   const title = isMgr() ? 'Lead breakdown' : 'My lead breakdown';
@@ -3503,7 +3539,7 @@ function breakdownHtml() {
   const wrap = (inner) => `<div class="bd" id="bd-main">${inner}</div>`;
   if (BR.err && !BR.firstsLoaded) return wrap(head() + `<div class="empty-s" id="bdErr">Could not load the lead breakdown: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></div>`);
   if (!BR.firstsLoaded) return wrap(head() + `<div id="bdLoading">${loader()}</div>`);
-  const { total, dims } = bdCompute(), fmt = (n) => n.toLocaleString('en-US');
+  const { total, dims, ab } = bdCompute(), fmt = (n) => n.toLocaleString('en-US');
   const drafts = isMgr() ? BR.rules.filter(r => r.draft).length : 0;
   const ctl = `<span class="spacer"></span><select id="bdRange" aria-label="Date range">${BD_PRESETS.map(x => `<option value="${x[0]}" ${x[0] === BR.preset ? 'selected' : ''}>${x[1]}</option>`).join('')}</select>`
     + (BR.preset === 'custom' ? `<input type="date" id="bdFrom" value="${esc(BR.from)}" aria-label="From"><input type="date" id="bdTo" value="${esc(BR.to)}" aria-label="To">` : '')
@@ -3513,21 +3549,22 @@ function breakdownHtml() {
   const figs = `<div class="bdfigs"><div class="bdfig main"><b id="bdTotal">${fmt(total)}</b><span>New leads</span></div>${topSrc.map(r => `<div class="bdfig"><b>${fmt(r.n)}</b><span>${esc(r.label)}</span></div>`).join('')}</div>`;
   const table = (dim, title) => {
     const rows = rowsOf(dim), total = rows.reduce((t, r) => t + r.n, 0);
-    return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button>${dim === 'area' && r.v === NO_RULE && isMgr() ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>
+    return `<section class="card bdbox" data-bddim="${dim}"><h3>${title}</h3>${rows.length ? `<table class="bdtbl"><thead><tr><th>${esc(title.replace(/^By /, '').replace(/^./, c => c.toUpperCase()))}</th><th class="num">Leads</th><th class="num">%</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr><td><button class="agentlink" data-bdrow="${dim}" data-bdval="${esc(r.v)}" title="Open these leads in People">${esc(r.label)}</button></td>
       <td class="num"><button class="cnt num" data-bdrow="${dim}" data-bdval="${esc(r.v)}" tabindex="-1">${fmt(r.n)}</button></td><td class="num sub">${total ? Math.round(r.n / total * 100) : 0}%</td>
-      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>${(UNKNOWN_WHY[dim] || []).filter(w => rows.some(r => r.v === w[0])).map(w => `<p class="sub bdfoot">${esc(w[1])}</p>`).join('')}` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
+      <td><span class="track"><span class="fill" style="width:${total ? r.n / total * 100 : 0}%"></span></span></td></tr>`).join('')}</tbody></table>` : '<div class="empty-s">No new leads in this range.</div>'}</section>`;
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
-  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div>` + (isMgr() ? `<div class="bdwide">${yglCardHtml()}${gapCardHtml()}</div>` : ''));
+  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div><div class="bdwide">${bdAreaBedsHtml(ab)}${isMgr() ? yglCardHtml() + gapCardHtml() : ''}</div>`);
 }
 // Redraw only this tab.
 function bdRender() { const el = $('#bd-main'); if (el) el.outerHTML = breakdownHtml(); else $('#breakdown').innerHTML = breakdownHtml(); }
 // A row click: People with this value and the same date range, so the list is exactly the leads that were counted.
-function bdGo(dim, val) {
+function bdGo(dim, val, bed) {
   const f = [];
   if (dim === 'source' || dim === 'zacct') f.push(val === '' ? { key: dim, op: 'empty' } : { key: dim, op: 'any', vals: [val] });
   else f.push({ key: dim, op: 'any', vals: [val] });
+  if (bed) f.push({ key: 'beds', op: 'any', vals: [bed] });   // v3.5: a cell of the area and bedrooms table
   f.push(bdFilter());
   if (!isMgr()) f.push({ key: 'agent', op: 'any', vals: [state.me.id] });   // the count is the agent's own leads, so the list is too
   peopleWith({ filters: f });
@@ -3575,7 +3612,7 @@ $('#dash').addEventListener('click', e => {
 $('#dash').addEventListener('change', onChange);
 $('#breakdown').addEventListener('click', e => {
   const t = e.target, bd = t.closest('[data-bdrow]');
-  if (bd) bdGo(bd.dataset.bdrow, bd.dataset.bdval);
+  if (bd) bdGo(bd.dataset.bdrow, bd.dataset.bdval, bd.dataset.bdbed);
   else if (t.closest('#bdRetry') || t.closest('#bdRefresh')) loadBreakdown(true);
   else if (t.closest('[data-bdareas]')) { goSetPage('areas'); go('settings'); }
 });
@@ -4155,7 +4192,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.4';
+const APP_VERSION = '3.5';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
