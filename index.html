@@ -920,6 +920,7 @@ const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publ
 const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,custom_auto,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
+const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by';   // v3.6: lead_options
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
@@ -971,13 +972,14 @@ function makeApi(url, key) {
       return ok(await sb.from('people').select(cols()).gte('updated_at', sinceIso).order('updated_at').order('id').range(from, from + PAGE - 1));
     },
     async person(id) {
-      const [notes, inquiries, collaborators] = await Promise.all([
+      const [notes, inquiries, collaborators, options] = await Promise.all([
         sb.from('notes').select(NOTE_COLS).eq('person_id', id).order('created_at', { ascending: false }),
         sb.from('inquiries').select('id,source,received_at,subject,message,listing_address,listing_url,listing_price')
           .eq('person_id', id).order('received_at', { ascending: false }),
         sb.from('lead_collaborators').select('person_id,member_id').eq('person_id', id),
+        sb.from('lead_options').select(OPT_COLS).eq('person_id', id).order('shared_at').order('id'),
       ]);
-      return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators) };
+      return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators), options: ok(options) };
     },
     async appointments(fromIso, toIso) {
       return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email,fub_id')
@@ -1064,9 +1066,14 @@ function makeApi(url, key) {
     async setStage(id, stageId, extra) {
       return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(cols()).single());
     },
-    async addNote(personId, meId, body, kind = 'note') {   // v2.5: kind 'text_log' for Log text (the notes.kind check already allows it)
-      return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: kind === 'text_log' ? 'text_log' : 'note', body }).select(NOTE_COLS).single());
+    async addNote(personId, meId, body, kind = 'note') {   // v2.5: kind 'text_log' for Log text (the notes.kind check already allows it). v3.6: 'system' for an option status change (notes_insert has no kind rule)
+      return ok(await sb.from('notes').insert({ person_id: personId, author_id: meId, kind: kind === 'text_log' ? 'text_log' : kind === 'system' ? 'system' : 'note', body }).select(NOTE_COLS).single());
     },
+    // v3.6 (supabase/05 lead_options, options_all follows the lead; supabase/20 pl_ygl_lookup). Row-level security turns a refused UPDATE into 0 rows, so updateOption checks for that.
+    async addOptions(rows) { return ok(await sb.from('lead_options').insert(rows).select(OPT_COLS)); },
+    async updateOption(id, patch) { const r = ok(await sb.from('lead_options').update(patch).eq('id', id).select(OPT_COLS)); if (!r.length) throw new Error('Not saved: you do not have access to this item.'); return r[0]; },
+    async deleteOption(id) { gone(await sb.from('lead_options').delete().eq('id', id).select('id')); },
+    async yglLookup(ids) { return ok(await sb.rpc('pl_ygl_lookup', { p_ids: ids })); },
     // v2.4: People columns and smart lists. Row-level security turns a refused UPDATE into 0 rows (no error), so these return the rows and the caller checks for 0.
     // Columns are { cols: [column keys, Name first] } or null (null = use the next level: own, then team default, then built-in).
     async saveMyColumns(memberId, value) { return ok(await sb.from('team_members').update({ people_columns: value }).eq('id', memberId).select('id')); },   // only a manager passes team_manage today
@@ -2378,6 +2385,8 @@ function onChange(e) {
   if (t.dataset.sel) toggleSel(t.dataset.sel, t.checked);
   else if (t.dataset.contact) toggleContacted(t.dataset.contact, t.checked);
   else if (t.dataset.stage) changeStage(t.dataset.stage, +t.value);
+  else if (t.dataset.optstatus) optStatus(t.dataset.optstatus, t.value);
+  else if (t.dataset.yr) optYr(t);
 }
 async function toggleContacted(id, on) {
   const p = byId.get(id); if (!p) return;
@@ -2505,7 +2514,7 @@ function closePanel() {
   try { history.replaceState(null, '', location.href.split('#')[0] + '#' + state.view); } catch (_) {}
   hidePanel();
 }
-function closePanelQuiet() { state.full = false; document.documentElement.classList.remove('leadfull'); state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
+function closePanelQuiet() { state.full = false; document.documentElement.classList.remove('leadfull'); state.open = null; state.detail = null; state.edit = null; state.lastEdit = null; resetOpt(); $('#panel').hidden = true; $('#panel').innerHTML = ''; $('#scrim').hidden = true; document.documentElement.classList.remove('noscroll'); }
 function hidePanel() { closePanelQuiet(); }
 $('#scrim').addEventListener('click', closePanel);
 $('#panel').addEventListener('click', e => {
@@ -2516,7 +2525,7 @@ $('#nav').addEventListener('click', e => { const b = e.target.closest('[data-vie
 
 async function showPanel(id) {
   if (state.open === id) return;
-  state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false; state.edit = null; state.lastEdit = null;
+  state.open = id; state.detail = null; state.detailErr = ''; state.draft = ''; state.missing = false; state.edit = null; state.lastEdit = null; resetOpt();
   if ($('#newNote')) $('#newNote').value = '';   // the full page keeps its composer while stepping: never carry one lead's unsent note to the next
   $('#panel').hidden = false; $('#scrim').hidden = false; document.documentElement.classList.add('noscroll');
   // For a moment the panel and scrim let clicks through, so the second click of a double-click lands on the row (it opens the full page).
@@ -2653,6 +2662,7 @@ function renderPanel() {
     <div class="panel-body">${roBanner}${dupBanner(p)}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div>
+      <div class="section" id="optionsSec"><h4>Options</h4>${d ? optionsHtml(p, d) : loadOrErr}</div>
       <div class="section"><h4>Notes</h4>${notes}</div></div>`;
   } else {
     // Full page (v2.5): left = person, Contact, Details; middle = composer and one timeline; right = navigation, Inquiries, Showings, Collaborators.
@@ -2665,7 +2675,7 @@ function renderPanel() {
         <textarea id="newNote" placeholder="${ct === 'note' ? 'Add a note' : 'What did you text them? (optional)'}" aria-label="${ct === 'note' ? 'Add a note' : 'Text to log'}"></textarea>
         <div class="row" style="justify-content:flex-end"><button class="btn primary small" id="${ct === 'note' ? 'saveNote' : 'logText'}" ${nb}>${ct === 'note' ? 'Create note' : 'Log text'}</button></div></div>`
       : (sms ? `<div class="section comp" id="composer"><div class="ctabs" style="margin-bottom:-12px;border-bottom:0">${sms}</div></div>` : '');
-    const ft = state.feedTab === 'notes' || state.feedTab === 'showings' ? state.feedTab : 'all';
+    const ft = state.feedTab === 'notes' || state.feedTab === 'showings' || state.feedTab === 'options' ? state.feedTab : 'all';
     const ap = state.leadAppts.get(p.id), apLoaded = !!(ap && ap.rows);
     let feed;
     if (!d) feed = loadOrErr;
@@ -2676,11 +2686,12 @@ function renderPanel() {
       const items = [
         ...d.notes.map(n => { const k = String(n.kind || 'note').replace(/[^a-z_]/g, ''), ic = NI[k] || NI.note; return { id: String(n.id), t: Date.parse(n.created_at) || 0, k: k === 'system' ? 'updates' : 'notes', html: `<div class="fi" data-fitem="note">${ico(ic[0], ic[1])}<div class="grow">${noteHtml(n, p, true)}</div></div>` }; }),
         ...rowsA.map(a => { const gone = a.canceled === true || a.canceled_at != null; return { id: String(a.id), t: Date.parse(a.starts_at) || 0, k: 'showings', html: `<div class="fi" data-fitem="showing">${gone ? ico('cx', '×') : ico('ap', '◷')}<div class="grow">${showingRowHtml(a, links, now, true)}</div></div>` }; }),
+        ...optEvents(d.options || []).map(e => ({ id: 'o' + e.id, t: e.t, k: 'updates', html: `<div class="fi" data-fitem="options">${ico(NI.system[0], NI.system[1])}<div class="grow">${noteHtml({ id: 'o' + e.id, kind: 'system', author_id: e.by, body: e.text, created_at: e.at }, null, true)}</div></div>` })),   // v3.6: "Added 3 options", under All only
       ].sort((x, y) => y.t - x.t || (x.id < y.id ? -1 : 1));
-      const cnt = (k) => k === 'all' ? items.length : items.filter(x => x.k === k).length;
-      const tabs = [['all', 'All'], ['notes', 'Notes'], ['showings', 'Showings']];
+      const cnt = (k) => k === 'all' ? items.length : k === 'options' ? (d.options || []).length : items.filter(x => x.k === k).length;
+      const tabs = [['all', 'All'], ['notes', 'Notes'], ['showings', 'Showings'], ['options', 'Options']];
       const shown = ft === 'all' ? items : items.filter(x => x.k === ft);
-      const body = shown.map(x => x.html).join('') || (ft === 'showings' && !apLoaded ? (ap && ap.err ? `<div class="err-s">${esc(ap.err)}</div>` : loader()) : '<div class="empty-s">Nothing here yet.</div>');
+      const body = ft === 'options' ? optionsHtml(p, d) : shown.map(x => x.html).join('') || (ft === 'showings' && !apLoaded ? (ap && ap.err ? `<div class="err-s">${esc(ap.err)}</div>` : loader()) : '<div class="empty-s">Nothing here yet.</div>');
       feed = `<div class="section feed" id="feed"><div class="ftabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-feed="${k}" aria-selected="${ft === k}">${l} <span class="num">${cnt(k)}</span></button>`).join('')}</div>${body}</div>`;
     }
     const ids = state.navIds, i = ids ? ids.indexOf(state.open) : -1;
@@ -2733,7 +2744,7 @@ async function editWrite(p, fn) {
   busy.delete(p.id); refresh();   // the lead stays locked until the re-read is done
   return ok;
 }
-function setEdit(k) { state.edit = k; renderPanel(); const f = $('#panel .editbox input, #panel .editbox select, #panel .editbox textarea'); if (f) f.focus(); }
+function setEdit(k) { if (k === 'opt:new') Object.assign(OPT, { url: '', lid: '', avail: null, len: 0 }); state.edit = k; renderPanel(); const f = $('#panel .editbox input, #panel .editbox select, #panel .editbox textarea'); if (f) f.focus(); }
 function editErr(m) { const e = $('#editErr'); if (e) e.textContent = m; }
 
 async function saveEdit() {
@@ -2771,6 +2782,7 @@ async function saveEdit() {
     const r = $('#eReason').value; if (!r) return editErr('Pick a reason.');
     return done(await editWrite(p, () => api.updatePerson(p.id, { nonworkable_reason: r })));
   }
+  if (kind === 'opt') { const r = arg === 'new' ? await optAdd(p) : await optSave(p, arg); if (state.open === p.id) done(r); return; }
   if (kind === 'note') {
     const body = $('#eNote').value.trim(), n = state.detail && state.detail.notes.find(x => String(x.id) === arg);
     if (!n || !canEditNote(n)) { toast('You can only change your own notes.'); return; }
@@ -2781,6 +2793,7 @@ async function saveEdit() {
 function askDelete(kind, id) {
   const p = byId.get(state.open); if (!p) return;
   if (!canEdit(p)) { toast(readOnlyWhy(p)); return; }
+  if (kind === 'option') { askDeleteOpt(p, id); return; }
   const fub = p.fub_id != null;
   const what = kind === 'phone' ? 'number' : kind === 'email' ? 'email' : 'note';
   const text = kind === 'note' ? 'Delete this note?' : `Remove this ${what}?${fub ? ' While FUB is still in use, the nightly sync adds it back if FUB has it.' : ''}`;
@@ -2832,6 +2845,234 @@ $('#panel').addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.shiftKey) return;
   if (e.target.id === 'tagAdd') { e.preventDefault(); addTag(); }
   else if (e.target.matches('.editbox input')) { e.preventDefault(); saveEdit(); }
+});
+
+// ───────── Options tab (v3.6; supabase/20 pl_ygl_lookup) ─────────
+// Listings an agent sends a renter, stored in lead_options. Statuses: shared / picked / not_interested. A status change also writes a system note ("Picked 11 Peterborough St"), so it has a time, a who, and counts as activity.
+const OPT_BEDS = ['Studio', '1 Bed', '2 Bed', '3 Bed', '4 Bed', '5+ Beds'];   // the labels of the # of Bedrooms field
+const OPT_STATUS = { shared: 'Shared', picked: 'Picked', not_interested: 'Not interested' };
+const OPT_FEE = { none: 'No fee', half: 'Half fee', full: 'Tenant pays fee' };
+const YGL_URL = /yougotlistings\.com|ygl\.is/i;
+const OPT_MAX_IDS = 50;   // pl_ygl_lookup refuses more
+let OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null };   // add-one hidden values; the paste text; the review rows
+function resetOpt() { OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null }; }
+const bedsLabel = (n) => n == null || n === '' || isNaN(n) || +n < 0 ? '' : +n >= 5 ? '5+ Beds' : OPT_BEDS[+n];
+const normAddr = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+// YGL gives "09/01/2026" (live) or "2026-12-01". Anything else, or a day that does not exist, is null and is not shown.
+function yglDate(s) {
+  const t = String(s || '').trim(), a = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/), b = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const [y, mo, d] = a ? [+a[3], +a[1], +a[2]] : b ? [+b[1], +b[2], +b[3]] : [0, 0, 0];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return y && dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null;
+}
+// One line as agents write it: "https://ygl.is/33ou/148542474 11 peterborough st #12 (tenant doesnt pay the broker fee) (offering 1 free month)". The YGL id is the last run of 5+ digits in the link.
+function parseOptionLine(line) {
+  const urlM = line.match(/https?:\/\/\S+/), url = urlM ? urlM[0].replace(/[.,;]+$/, '') : null;
+  const ygl = !!url && YGL_URL.test(url), ids = ygl ? url.match(/\d{5,}/g) : null, lid = ids ? ids[ids.length - 1] : null;
+  const rest = (urlM ? line.replace(urlM[0], '') : line).trim();
+  let fee = '', offer = '';
+  [...rest.matchAll(/\(([^)]*)\)/g)].map(m => m[1].trim()).forEach(t => {
+    const l = t.toLowerCase();
+    if (/fee/.test(l)) fee = /(doesn.?t|does not|don.?t|no)\b.*pay|no (broker )?fee|not pay/.test(l) ? 'none' : /half/.test(l) ? 'half' : 'full';
+    else if (/free|offer|discount|credit|off\b/.test(l)) offer = t.replace(/^offering\s+/i, '').replace(/^\w/, c => c.toUpperCase());
+  });
+  const addr = rest.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().replace(/(^|\s)([a-z])/g, (m, s1, c) => s1 + c.toUpperCase());
+  return { addr, url, ygl, lid, fee, offer };
+}
+// A pasted list, one listing per line. "OP" / "options picked" / "picked" starts the picked part. A line with no link and no street number is a heading and is skipped. A repeat (same YGL id or same address) is one row.
+function parsePasteList(text) {
+  let picking = false; const rows = [];
+  for (const line of String(text || '').split('\n').map(l => l.trim()).filter(Boolean)) {
+    if (/^(op|options picked|picked)\s*:?$/i.test(line)) { picking = true; continue; }
+    const q = parseOptionLine(line);
+    if (!q.url && !/^\d+[a-z]?(-\d+)?\s+\S/i.test(q.addr)) continue;
+    const prev = rows.find(r => (q.lid && r.lid === q.lid) || (q.addr && r.addr && normAddr(r.addr) === normAddr(q.addr)));
+    if (prev) { if (picking) prev.picked = true; prev.fee = prev.fee || q.fee; prev.offer = prev.offer || q.offer; continue; }
+    rows.push({ url: q.url, lid: q.lid, addr: q.addr, rent: null, beds: '', avail: null, fee: q.fee, offer: q.offer, picked: picking, inc: true, found: false, dup: false });
+  }
+  return rows;
+}
+// "Added 3 options": adds by the same member, each within 2 minutes of the one before, are one batch.
+function optEvents(opts) {
+  const out = [];
+  for (const o of opts.slice().sort((a, b) => Date.parse(a.shared_at) - Date.parse(b.shared_at) || (a.id < b.id ? -1 : 1))) {
+    const t = Date.parse(o.shared_at) || 0, last = out[out.length - 1];
+    if (last && last.by === o.shared_by && t - last.lastT <= 120000) { last.n++; last.lastT = t; } else out.push({ id: o.id, by: o.shared_by, at: o.shared_at, t, lastT: t, n: 1 });
+  }
+  return out.map(e => ({ ...e, text: e.n === 1 ? 'Added 1 option' : `Added ${e.n} options` }));
+}
+const optFeeSel = (cur, attrs) => `<select ${attrs}><option value="">Broker fee…</option>${Object.entries(OPT_FEE).map(([k, t]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+const optPills = (o) => (o.broker_fee ? ` <span class="pill ${o.broker_fee === 'none' ? 'ok' : 'warn'}">${OPT_FEE[o.broker_fee]}</span>` : '') + (o.offer ? ` <span class="pill info">${esc(o.offer)}</span>` : '');
+function optRowHtml(o, can, dis) {
+  const web = /^https?:\/\//i.test(o.url || ''), ygl = YGL_URL.test(o.url || '') || o.ygl_listing_id != null;
+  const addr = web ? `<a class="maillink" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.address)} ↗</a>` : esc(o.address);
+  const by = o.shared_by ? memberName(o.shared_by) : '';
+  const meta = [o.rent != null ? money(o.rent) + '/mo' : '', o.beds ? esc(o.beds) : '', o.available_on ? 'avail. ' + esc(fmtDate(o.available_on)) : '', `shared ${esc(fmtShort(o.shared_at))}${by ? ' by ' + esc(by) : ''}`].filter(Boolean).join(' · ');
+  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}<div class="sub">${meta}</div></div>
+    ${can ? `<button class="pen" data-edit="opt:${esc(o.id)}" aria-label="Edit ${esc(o.address)}" ${dis}>${penSvg}</button>` : ''}
+    <select class="optsel ${o.status === 'not_interested' ? 'passed' : esc(o.status)}" data-optstatus="${esc(o.id)}" aria-label="Status of ${esc(o.address)}" ${can ? dis : 'disabled'}>${Object.entries(OPT_STATUS).map(([k, t]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    ${can ? `<button class="x" data-del="option" data-id="${esc(o.id)}" aria-label="Remove ${esc(o.address)}" ${dis}>×</button>` : ''}</div>`;
+}
+// The add and edit form: the same fields. Fields have ids, so a redraw keeps what was typed.
+function optFormHtml(o, dis, isNew) {
+  const v = o || {};
+  return editbox(`<div class="optedit"><input id="oAddr" data-oe="addr" value="${esc(v.address || '')}" placeholder="${isNew ? 'Address or YGL link' : 'Address'}" aria-label="${isNew ? 'Address or YGL link' : 'Address'}">
+    <input id="oRent" type="number" min="0" step="any" value="${v.rent != null ? esc(v.rent) : ''}" placeholder="$/mo" aria-label="Rent">
+    <select id="oBeds" aria-label="Bedrooms"><option value="">Beds</option>${OPT_BEDS.map(b => `<option ${v.beds === b ? 'selected' : ''}>${b}</option>`).join('')}</select>
+    ${optFeeSel(v.broker_fee, 'id="oFee" aria-label="Broker fee"')}<input id="oOffer" data-oe="offer" value="${esc(v.offer || '')}" placeholder="Offer, e.g. 1 free month" aria-label="Offer"></div>`, dis).replace('>Save<', `>${isNew ? 'Add option' : 'Save'}<`);
+}
+function optPasteHtml(dis) {
+  return `<div class="editbox"><div class="sub">Paste one listing per line, like "https://ygl.is/33ou/148542474 11 Peterborough St #12 (no broker fee) (1 free month)". Lines under "OP" are marked Picked. A line with no link keeps the address as typed.</div>
+    <textarea id="optPaste" style="min-height:120px" aria-label="Listings to add">${esc(OPT.paste)}</textarea><div class="err" id="editErr"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn small" data-editcancel ${dis}>Cancel</button><button class="btn small primary" data-ylook ${dis}>Look up listings</button></div></div>`;
+}
+function optReviewHtml(dis) {
+  const rs = OPT.rows || [], n = rs.filter(r => r.inc).length;
+  return `<div class="editbox"><div class="sub">Check the listings, add the fee and offer, then add them.</div>
+    <div class="yrtable">${rs.map((r, i) => {
+      const label = r.addr || 'listing ' + (i + 1), meta = [r.rent != null ? money(r.rent) + '/mo' : '', r.beds ? esc(r.beds) : '', r.avail ? 'avail. ' + esc(fmtDate(r.avail)) : ''].filter(Boolean).join(' · ');
+      const web = /^https?:\/\//i.test(r.url || '');
+      return `<div class="yr" data-yrow="${i}"><label class="yr-inc"><input type="checkbox" data-yr="inc" data-i="${i}" ${r.inc ? 'checked' : ''} aria-label="Include ${esc(label)}"></label>
+        <div class="yr-main">${r.found ? `<b>${esc(r.addr)}</b>` : `<input data-yr="addr" data-i="${i}" value="${esc(r.addr)}" placeholder="Address" aria-label="Address of listing ${i + 1}">`} <span class="sub">${meta}</span>
+          <div class="sub">${web ? `<a class="maillink" href="${esc(r.url)}" target="_blank" rel="noopener">${r.lid ? 'YGL #' + esc(r.lid) : 'Link'} ↗</a>` : 'No link'}${r.dup ? ' · already added' : ''}${r.lid && !r.found ? ' · not in tonight\'s YGL copy' : ''}</div></div>
+        ${optFeeSel(r.fee, `data-yr="fee" data-i="${i}" aria-label="Broker fee for ${esc(label)}"`)}
+        <input data-yr="offer" data-i="${i}" value="${esc(r.offer)}" placeholder="Offer, e.g. 1 free month" aria-label="Offer for ${esc(label)}">
+        <label class="yr-pick"><input type="checkbox" data-yr="pick" data-i="${i}" ${r.picked ? 'checked' : ''}> Picked</label></div>`;
+    }).join('')}</div><div class="err" id="editErr"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn small" data-editcancel ${dis}>Cancel</button><button class="btn small primary" data-ysave ${dis}>Add ${n} option${n === 1 ? '' : 's'}</button></div></div>`;
+}
+function optionsHtml(p, d) {
+  const opts = d.options || [], can = canEdit(p), dis = busy.has(p.id) || busy.has('o:' + p.id) ? 'disabled' : '';
+  const picked = opts.filter(o => o.status === 'picked').length;
+  const add = !can ? '' : state.edit === 'opt:new' ? optFormHtml(null, dis, true) : state.edit === 'optpaste' ? optPasteHtml(dis) : state.edit === 'optreview' ? optReviewHtml(dis)
+    : `<div class="row" style="margin-top:8px"><button class="btn small soft" data-edit="opt:new" ${dis}>+ Add option</button><button class="btn small soft" data-edit="optpaste" ${dis}>Paste a list</button></div>`;
+  return `<div class="sub" id="optSummary" style="margin-bottom:4px">${opts.length ? `${picked} picked of ${opts.length} shared` : 'Add the listings you send this renter. Mark the ones they pick.'}</div>`
+    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : optRowHtml(o, can, dis)).join('') + add;
+}
+const readOptForm = () => ({ address: $('#oAddr').value.trim(), rent: $('#oRent').value.trim(), beds: $('#oBeds').value, fee: $('#oFee').value, offer: $('#oOffer').value.trim() });
+// One options write at a time per lead. A failure keeps the form filled and shows the message (in the form, else as a toast). If the user moved to another lead meanwhile, nothing on the new lead is touched.
+async function optRun(p, fn) {
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); return false; }
+  const key = 'o:' + p.id; if (busy.has(key)) return false;
+  busy.add(key); if (state.open === p.id) renderPanel();
+  let err = '';
+  try { await fn(); } catch (e) { err = e.message || 'Not saved.'; }
+  busy.delete(key);
+  if (state.open === p.id) { renderPanel(); if (err) { if ($('#editErr')) editErr(err); else toast(err); } } else if (err) toast(err);
+  return !err;
+}
+const optMerge = (id, rows) => { if (state.open !== id || !state.detail) return; const have = new Set(state.detail.options.map(o => o.id)); state.detail.options.push(...rows.filter(r => !have.has(r.id))); state.detail.options.sort((a, b) => Date.parse(a.shared_at) - Date.parse(b.shared_at) || (a.id < b.id ? -1 : 1)); };
+// Add one. A YGL link that has not been looked up yet is looked up first (the form fills; the agent adds the fee, then adds).
+async function optAdd(p) {
+  const id = p.id, f = readOptForm(), q = parseOptionLine(f.address);
+  if (q.ygl && q.lid && OPT.lid !== q.lid) { await yglFill(); return false; }
+  if (!q.addr) { editErr(q.url ? 'Not in tonight\'s YGL copy. Fill in the address by hand.' : 'Type the listing address first.'); return false; }
+  const rent = f.rent === '' ? null : Number(f.rent);
+  if (rent != null && !(rent >= 0)) { editErr('Rent must be a number.'); return false; }
+  const row = { person_id: id, address: q.addr, rent, beds: f.beds || null, available_on: OPT.avail || null, url: q.url || OPT.url || null, ygl_listing_id: (q.ygl && q.lid) || OPT.lid || null,
+    broker_fee: f.fee || q.fee || null, offer: f.offer || q.offer || '', status: 'shared', shared_by: state.me.id };
+  const ok = await optRun(p, async () => { optMerge(id, await api.addOptions([row])); });
+  if (ok && state.open === id) resetOpt();
+  return ok;
+}
+async function optSave(p, oid) {
+  const id = p.id, f = readOptForm(), rent = f.rent === '' ? null : Number(f.rent);
+  if (!f.address) { editErr('The address is required.'); return false; }
+  if (rent != null && !(rent >= 0)) { editErr('Rent must be a number.'); return false; }
+  return optRun(p, async () => {
+    const r = await api.updateOption(oid, { address: f.address, rent, beds: f.beds || null, broker_fee: f.fee || null, offer: f.offer });
+    if (state.open === id && state.detail) { const i = state.detail.options.findIndex(x => x.id === oid); if (i >= 0) state.detail.options[i] = r; }
+  });
+}
+function askDeleteOpt(p, oid) {
+  const o = state.detail && state.detail.options.find(x => x.id === oid); if (!o) return;
+  showModal(`<h3 id="delText">Remove ${esc(o.address)} from the options?</h3><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="delGo">Remove</button></div>`);
+  $('#delGo').onclick = async () => {
+    closeModal();
+    await optRun(p, async () => { await api.deleteOption(oid); if (state.open === p.id && state.detail) state.detail.options = state.detail.options.filter(x => x.id !== oid); });
+  };
+}
+// Status select: Shared / Picked / Not interested. Picked and Not interested also write a system note. If the note fails the status stays and a toast says so.
+async function optStatus(oid, status) {
+  const p = byId.get(state.open), id = state.open, o = state.detail && state.detail.options.find(x => x.id === oid);
+  if (!p || !o || !OPT_STATUS[status] || o.status === status) { renderPanel(); return; }
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); renderPanel(); return; }
+  const ok = await optRun(p, async () => {
+    const r = await api.updateOption(oid, { status });
+    if (state.open === id && state.detail) Object.assign(o, r);
+    if (status === 'shared') return;
+    try {
+      const note = await api.addNote(id, state.me.id, (status === 'picked' ? 'Picked ' : 'Not interested in ') + o.address, 'system');
+      if (state.open === id && state.detail) state.detail.notes.unshift(note);
+    } catch (e) { toast('Status saved, but the activity note was not: ' + (e.message || 'error')); }
+  });
+  if (ok) await reread(id);
+}
+// Paste a YGL link in the address box: address, rent and beds fill from YGL (pl_ygl_lookup); the date and link are kept for the save. Not found: the link stays and a toast says to type the address.
+async function yglFill() {
+  const el = $('#oAddr'), id = state.open; if (!el) return;
+  const v = el.value.trim(), q = parseOptionLine(v); if (!q.ygl || !q.lid) return;
+  let rows;
+  try { rows = await api.yglLookup([q.lid]); } catch (e) { if (state.open === id && $('#editErr')) editErr(e.message || 'The YGL lookup failed.'); return; }
+  const a = $('#oAddr'); if (state.open !== id || state.edit !== 'opt:new' || !a || a.value.trim() !== v) return;
+  const f = (rows || []).find(x => String(x.ygl_id) === q.lid);
+  OPT.url = q.url; OPT.lid = q.lid; OPT.avail = f ? yglDate(f.available_date) : null;
+  if (!f) { toast('Not in tonight\'s YGL copy. Fill in the address by hand.'); return; }
+  const beds = bedsLabel(f.beds);
+  a.value = f.address; OPT.len = a.value.length; $('#oRent').value = f.price != null ? f.price : ''; $('#oBeds').value = beds;
+  if (q.fee) $('#oFee').value = q.fee; if (q.offer) $('#oOffer').value = q.offer;
+  toast(`Filled from YGL: ${f.address}${f.price != null ? ', ' + money(f.price) + '/mo' : ''}${beds ? ', ' + beds : ''}. Add the fee and offer.`); $('#oFee').focus();
+}
+// Look up listings: one pl_ygl_lookup call for every id, then the review table. YGL values replace typed address text; a row already on the lead starts unchecked.
+async function optLookup() {
+  const p = byId.get(state.open), d = state.detail, id = state.open; if (!p || !d) return;
+  if (!canEdit(p)) { toast(readOnlyWhy(p)); return; }
+  const rows = parsePasteList(OPT.paste);
+  if (!rows.length) { editErr('Nothing to add. Paste one listing per line, with a YGL link or a street address.'); return; }
+  const ids = [...new Set(rows.map(r => r.lid).filter(Boolean))];
+  if (ids.length > OPT_MAX_IDS) { editErr(`Paste at most ${OPT_MAX_IDS} YGL links at a time (there are ${ids.length}).`); return; }
+  const key = 'o:' + id; if (busy.has(key)) return;
+  busy.add(key); renderPanel();
+  let found = new Map(), err = '';
+  try { if (ids.length) found = new Map((await api.yglLookup(ids)).map(x => [String(x.ygl_id), x])); } catch (e) { err = e.message || 'The YGL lookup failed.'; }
+  busy.delete(key);
+  if (state.open !== id) return;
+  if (err) { renderPanel(); editErr(err); return; }   // the paste box stays filled
+  rows.forEach(r => {
+    const f = r.lid ? found.get(r.lid) : null;
+    if (f) { r.addr = f.address; r.rent = f.price != null ? f.price : null; r.beds = bedsLabel(f.beds); r.avail = yglDate(f.available_date); r.found = true; }
+    r.dup = d.options.some(o => (r.lid && String(o.ygl_listing_id) === r.lid) || (r.url && o.url === r.url));
+    r.inc = !r.dup;
+  });
+  OPT.rows = rows; state.edit = 'optreview'; renderPanel();
+}
+async function optReviewSave() {
+  const p = byId.get(state.open), id = state.open, add = (OPT.rows || []).filter(r => r.inc); if (!p) return;
+  if (!add.length) { editErr('Check at least one listing.'); return; }
+  if (add.some(r => !String(r.addr).trim())) { editErr('Every checked listing needs an address.'); return; }
+  const rows = add.map(r => ({ person_id: id, address: r.addr.trim(), rent: r.rent, beds: r.beds || null, available_on: r.avail || null, url: r.url || null, ygl_listing_id: r.lid || null,
+    broker_fee: r.fee || null, offer: r.offer.trim(), status: r.picked ? 'picked' : 'shared', shared_by: state.me.id }));
+  const ok = await optRun(p, async () => { optMerge(id, await api.addOptions(rows)); });
+  if (ok && state.open === id) { resetOpt(); state.edit = null; renderPanel(); toast(`Added ${rows.length} option${rows.length === 1 ? '' : 's'}${rows.some(r => r.status === 'picked') ? `, ${rows.filter(r => r.status === 'picked').length} picked` : ''}.`); }
+}
+// Review-table controls: keep OPT.rows in step with what is typed; a redraw then loses nothing.
+function optYr(t) {
+  const r = (OPT.rows || [])[+t.dataset.i]; if (!r) return;
+  const k = t.dataset.yr;
+  if (k === 'inc' || k === 'pick') { r[k === 'inc' ? 'inc' : 'picked'] = t.checked; renderPanel(); } else r[k === 'addr' ? 'addr' : k === 'fee' ? 'fee' : 'offer'] = t.value;
+}
+$('#panel').addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'oAddr' && state.edit === 'opt:new') {
+    const v = t.value, jump = v.length - OPT.len; OPT.len = v.length;
+    if (!v.trim()) { OPT.url = ''; OPT.lid = ''; OPT.avail = null; }
+    else if (/^insertFrom/.test(e.inputType || '') || jump > 5) yglFill();   // a paste (or a big jump), not typing
+  } else if (t.id === 'optPaste') OPT.paste = t.value;
+  else if (t.dataset.yr && t.type !== 'checkbox' && t.tagName !== 'SELECT') optYr(t);
+});
+$('#panel').addEventListener('click', e => {
+  if (e.target.closest('[data-ylook]')) optLookup();
+  else if (e.target.closest('[data-ysave]')) optReviewSave();
 });
 
 // kind 'note' = Save / Create note. kind 'text_log' = Log text (v2.5): a note with kind text_log; an empty box logs "Texted <first name>".
@@ -4192,7 +4433,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.5';
+const APP_VERSION = '3.6';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
