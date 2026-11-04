@@ -215,6 +215,7 @@ tr.unread .pc-top .name { font-weight: 700; }
 .pill { display: inline-flex; align-items: center; gap: 4px; border-radius: 10px; padding: 0 8px; font-size: 11.5px; font-weight: 600; white-space: nowrap; line-height: 1.6; }
 .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.info { background: var(--accent-soft); color: var(--accent); }
+.pill.off-tag { background: var(--line); color: var(--ink-2); } .pill .tag-x { border: 0; background: none; color: inherit; font: inherit; padding: 0 0 0 2px; cursor: pointer; line-height: 1; } .pill .tag-x:hover { color: var(--bad); }
 .empty { padding: 40px 16px; text-align: center; color: var(--ink-3); }
 
 /* Filter panel (FUB style) */
@@ -920,7 +921,7 @@ const SUPABASE_KEY = 'sb_publishable_U5lTC_PQjCatgKnamF8vrQ_-dBtFKZk';   // publ
 const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,source,tags,custom,custom_auto,nonworkable_reason,created_at,last_activity_at,contacted_at,contacted_by,person_emails(id,email,is_relay),person_phones(id,phone,label),fub_id';
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
-const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by,note';   // v3.6: lead_options; v3.7: note (supabase/21)
+const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by,note,off_market';   // v3.6: lead_options; v3.7: note (supabase/21); v3.9: off_market (supabase/22)
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
@@ -2862,8 +2863,8 @@ const OPT_FEE = { none: 'No fee', half: 'Half fee', full: 'Tenant pays fee' };
 const YGL_URL = /yougotlistings\.com|ygl\.is/i;
 const OPT_MAX_IDS = 50;   // pl_ygl_lookup refuses more
 const OFF_MARKET_MSG = 'Off market on YGL — check the rent.';
-let OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null, wait: false };   // add-one hidden values; the paste text; the review rows
-function resetOpt() { OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null, wait: false }; }
+let OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false };   // add-one hidden values; the paste text; the review rows
+function resetOpt() { OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false }; }
 const bedsLabel = (n) => n == null || n === '' || isNaN(n) || +n < 0 ? '' : +n >= 5 ? '5+ Beds' : OPT_BEDS[+n];
 const normAddr = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // YGL gives "09/01/2026" (live) or "2026-12-01". Anything else, or a day that does not exist, is null and is not shown.
@@ -2925,7 +2926,7 @@ function optRowHtml(o, can, dis) {
   const addr = web ? `<a class="maillink" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.address)} ↗</a>` : esc(o.address);
   const by = o.shared_by ? memberName(o.shared_by) : '';
   const meta = [o.rent != null ? money(o.rent) + '/mo' : '', o.beds ? esc(o.beds) : '', o.available_on ? 'avail. ' + esc(fmtDate(o.available_on)) : '', `shared ${esc(fmtShort(o.shared_at))}${by ? ' by ' + esc(by) : ''}`].filter(Boolean).join(' · ');
-  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}<div class="sub">${meta}</div>${o.note ? `<div class="opt-note" style="white-space:pre-wrap;margin-top:2px">${esc(o.note)}</div>` : ''}</div>
+  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}${o.off_market ? ` <span class="pill off-tag">Off market${can ? `<button class="tag-x" data-offclr="${esc(o.id)}" aria-label="Remove the Off market tag from ${esc(o.address)}" ${dis}>×</button>` : ''}</span>` : ''}<div class="sub">${meta}</div>${o.note ? `<div class="opt-note" style="white-space:pre-wrap;margin-top:2px">${esc(o.note)}</div>` : ''}</div>
     ${can ? `<button class="pen" data-edit="opt:${esc(o.id)}" aria-label="Edit ${esc(o.address)}" ${dis}>${penSvg}</button>` : ''}
     <select class="optsel ${o.status === 'not_interested' ? 'passed' : esc(o.status)}" data-optstatus="${esc(o.id)}" aria-label="Status of ${esc(o.address)}" ${can ? dis : 'disabled'}>${Object.entries(OPT_STATUS).map(([k, t]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
     ${can ? `<button class="x" data-del="option" data-id="${esc(o.id)}" aria-label="Remove ${esc(o.address)}" ${dis}>×</button>` : ''}</div>`;
@@ -2993,7 +2994,7 @@ async function optAdd(p) {
   const rent = f.rent === '' ? null : Number(f.rent);
   if (rent != null && !(rent >= 0)) { editErr('Rent must be a number.'); return false; }
   const row = { person_id: id, address: q.addr, rent, beds: f.beds || null, available_on: OPT.avail || null, url: q.url || OPT.url || null, ygl_listing_id: (q.ygl && q.lid) || OPT.lid || null,
-    broker_fee: f.fee || q.fee || null, offer: f.offer || q.offer || '', note: f.note, status: 'shared', shared_by: state.me.id };
+    broker_fee: f.fee || q.fee || null, offer: f.offer || q.offer || '', note: f.note, status: 'shared', shared_by: state.me.id, off_market: !!OPT.off };
   const ok = await optRun(p, async () => { optMerge(id, await api.addOptions([row])); });
   if (ok && state.open === id) resetOpt();
   return ok;
@@ -3057,7 +3058,7 @@ async function yglFill() {
     if (m) { f = m.row; off = m.off; }
   }
   const a = fresh(); if (!a) return;
-  OPT.url = q.url; OPT.lid = q.lid; OPT.avail = f ? yglDate(f.available_date) : null;
+  OPT.url = q.url; OPT.lid = q.lid; OPT.avail = f ? yglDate(f.available_date) : null; OPT.off = !!(f && off);
   if (!f) { toast('Not in tonight\'s YGL copy. Fill in the address by hand.'); return; }
   const beds = bedsLabel(f.beds);
   a.value = addrCase(f.address); OPT.len = a.value.length; $('#oRent').value = f.price != null ? f.price : ''; $('#oBeds').value = beds;
@@ -3097,7 +3098,7 @@ async function optReviewSave() {
   if (!add.length) { editErr('Check at least one listing.'); return; }
   if (add.some(r => !String(r.addr).trim())) { editErr('Every checked listing needs an address.'); return; }
   const rows = add.map(r => ({ person_id: id, address: addrCase(r.addr), rent: r.rent, beds: r.beds || null, available_on: r.avail || null, url: r.url || null, ygl_listing_id: r.lid || null,
-    broker_fee: r.fee || null, offer: r.offer.trim(), status: r.picked ? 'picked' : 'shared', shared_by: state.me.id }));
+    broker_fee: r.fee || null, offer: r.offer.trim(), status: r.picked ? 'picked' : 'shared', shared_by: state.me.id, off_market: !!r.off }));
   const ok = await optRun(p, async () => { optMerge(id, await api.addOptions(rows)); });
   if (ok && state.open === id) { resetOpt(); state.edit = null; renderPanel(); toast(`Added ${rows.length} option${rows.length === 1 ? '' : 's'}${rows.some(r => r.status === 'picked') ? `, ${rows.filter(r => r.status === 'picked').length} picked` : ''}.`); }
 }
@@ -3111,7 +3112,7 @@ $('#panel').addEventListener('input', e => {
   const t = e.target;
   if (t.id === 'oAddr' && state.edit === 'opt:new') {
     const v = t.value, jump = v.length - OPT.len; OPT.len = v.length;
-    if (!v.trim()) { OPT.url = ''; OPT.lid = ''; OPT.avail = null; }
+    if (!v.trim()) { OPT.url = ''; OPT.lid = ''; OPT.avail = null; OPT.off = false; }
     else if (/^insertFrom/.test(e.inputType || '') || jump > 5) yglFill();   // a paste (or a big jump), not typing
   } else if (t.id === 'optPaste') OPT.paste = t.value;
   else if (t.dataset.yr && t.type !== 'checkbox' && t.tagName !== 'SELECT') optYr(t);
@@ -3119,7 +3120,13 @@ $('#panel').addEventListener('input', e => {
 $('#panel').addEventListener('click', e => {
   if (e.target.closest('[data-ylook]')) optLookup();
   else if (e.target.closest('[data-ysave]')) optReviewSave();
+  else if (e.target.closest('[data-offclr]')) optOffClear(e.target.closest('[data-offclr]').dataset.offclr);
 });
+// v3.9: the × on an option's Off market tag clears lead_options.off_market (the listing is back on the market, or the agent checked it).
+async function optOffClear(oid) {
+  const p = byId.get(state.open), id = state.open, o = state.detail && state.detail.options.find(x => x.id === oid); if (!p || !o) return false;
+  return optRun(p, async () => { const r = await api.updateOption(oid, { off_market: false }); if (state.open === id) Object.assign(o, r); });
+}
 
 // kind 'note' = Save / Create note. kind 'text_log' = Log text (v2.5): a note with kind text_log; an empty box logs "Texted <first name>".
 async function saveNote(kind = 'note') {
@@ -4479,7 +4486,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.8';
+const APP_VERSION = '3.9';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
