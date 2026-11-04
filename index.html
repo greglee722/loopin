@@ -1074,6 +1074,12 @@ function makeApi(url, key) {
     async updateOption(id, patch) { const r = ok(await sb.from('lead_options').update(patch).eq('id', id).select(OPT_COLS)); if (!r.length) throw new Error('Not saved: you do not have access to this item.'); return r[0]; },
     async deleteOption(id) { gone(await sb.from('lead_options').delete().eq('id', id).select('id')); },
     async yglLookup(ids) { return ok(await sb.rpc('pl_ygl_lookup', { p_ids: ids })); },
+    // v3.8: the ygl-page Edge Function reads the public YGL share page for links the nightly copy misses. paths = the part after https://ygl.is/ . Returns [{ path, ygl_id, status: ok|off_market|not_found|error, address, neighborhood, price, beds, available }].
+    async yglPage(paths) {
+      const { data, error } = await sb.functions.invoke('ygl-page', { body: { items: paths.map(path => ({ path })) } });
+      if (error) { let m = ''; try { m = (await error.context.json()).error; } catch (_) { /* no body */ } throw new Error(m || 'The YGL page lookup failed.'); }
+      return (data && data.results) || [];
+    },
     // v2.4: People columns and smart lists. Row-level security turns a refused UPDATE into 0 rows (no error), so these return the rows and the caller checks for 0.
     // Columns are { cols: [column keys, Name first] } or null (null = use the next level: own, then team default, then built-in).
     async saveMyColumns(memberId, value) { return ok(await sb.from('team_members').update({ people_columns: value }).eq('id', memberId).select('id')); },   // only a manager passes team_manage today
@@ -2855,8 +2861,9 @@ const OPT_STATUS = { shared: 'Shared', picked: 'Picked', not_interested: 'Not in
 const OPT_FEE = { none: 'No fee', half: 'Half fee', full: 'Tenant pays fee' };
 const YGL_URL = /yougotlistings\.com|ygl\.is/i;
 const OPT_MAX_IDS = 50;   // pl_ygl_lookup refuses more
-let OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null };   // add-one hidden values; the paste text; the review rows
-function resetOpt() { OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null }; }
+const OFF_MARKET_MSG = 'Off market on YGL — check the rent.';
+let OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null, wait: false };   // add-one hidden values; the paste text; the review rows
+function resetOpt() { OPT = { url: '', lid: '', avail: null, len: 0, paste: '', rows: null, wait: false }; }
 const bedsLabel = (n) => n == null || n === '' || isNaN(n) || +n < 0 ? '' : +n >= 5 ? '5+ Beds' : OPT_BEDS[+n];
 const normAddr = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // YGL gives "09/01/2026" (live) or "2026-12-01". Anything else, or a day that does not exist, is null and is not shown.
@@ -2866,10 +2873,11 @@ function yglDate(s) {
   const dt = new Date(Date.UTC(y, mo - 1, d));
   return y && dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null;
 }
-// One line as agents write it: "https://ygl.is/33ou/148542474 11 peterborough st #12 (tenant doesnt pay the broker fee) (offering 1 free month)". The YGL id is the last run of 5+ digits in the link.
+// One line as agents write it: "https://ygl.is/33ou/148542474 11 peterborough st #12 (tenant doesnt pay the broker fee) (offering 1 free month)". The YGL id is the last run of 5+ digits in the link. v3.8: path = the part after ygl.is/ ("33ou/148542474" or "agent-slug/rental/148542474"); only ygl.is links have one.
 function parseOptionLine(line) {
   const urlM = line.match(/https?:\/\/\S+/), url = urlM ? urlM[0].replace(/[.,;]+$/, '') : null;
   const ygl = !!url && YGL_URL.test(url), ids = ygl ? url.match(/\d{5,}/g) : null, lid = ids ? ids[ids.length - 1] : null;
+  const pm = url && url.match(/^https?:\/\/(?:www\.)?ygl\.is\/([A-Za-z0-9_-]{1,60}(?:\/rental)?\/\d{5,12})(?=$|[?#])/i), path = pm && pm[1].split('/').pop() === lid ? pm[1] : null;
   const rest = (urlM ? line.replace(urlM[0], '') : line).trim();
   let fee = '', offer = '';
   [...rest.matchAll(/\(([^)]*)\)/g)].map(m => m[1].trim()).forEach(t => {
@@ -2878,7 +2886,7 @@ function parseOptionLine(line) {
     else if (/free|offer|discount|credit|off\b/.test(l)) offer = t.replace(/^offering\s+/i, '').replace(/^\w/, c => c.toUpperCase());
   });
   const addr = addrCase(rest.replace(/\([^)]*\)/g, ''));
-  return { addr, url, ygl, lid, fee, offer };
+  return { addr, url, ygl, lid, path, fee, offer };
 }
 // v3.7: one letter case for every address, typed or from YGL. "pETerboroUGH st" → "Peterborough St"; "#12b" → "#12B"; "1st" stays "1st"; "o'brien" → "O'Brien".
 function addrCase(s) {
@@ -2896,8 +2904,8 @@ function parsePasteList(text) {
     const q = parseOptionLine(line);
     if (!q.url && !/^\d+[a-z]?(-\d+)?\s+\S/i.test(q.addr)) continue;
     const prev = rows.find(r => (q.lid && r.lid === q.lid) || (q.addr && r.addr && normAddr(r.addr) === normAddr(q.addr)));
-    if (prev) { if (picking) prev.picked = true; prev.fee = prev.fee || q.fee; prev.offer = prev.offer || q.offer; continue; }
-    rows.push({ url: q.url, lid: q.lid, addr: q.addr, rent: null, beds: '', avail: null, fee: q.fee, offer: q.offer, picked: picking, inc: true, found: false, dup: false });
+    if (prev) { if (picking) prev.picked = true; prev.path = prev.path || q.path; prev.fee = prev.fee || q.fee; prev.offer = prev.offer || q.offer; continue; }
+    rows.push({ url: q.url, lid: q.lid, path: q.path, off: false, addr: q.addr, rent: null, beds: '', avail: null, fee: q.fee, offer: q.offer, picked: picking, inc: true, found: false, dup: false });
   }
   return rows;
 }
@@ -2948,7 +2956,7 @@ function optReviewHtml(dis) {
       const web = /^https?:\/\//i.test(r.url || '');
       return `<div class="yr" data-yrow="${i}"><label class="yr-inc"><input type="checkbox" data-yr="inc" data-i="${i}" ${r.inc ? 'checked' : ''} aria-label="Include ${esc(label)}"></label>
         <div class="yr-main">${r.found ? `<b>${esc(r.addr)}</b>` : `<input data-yr="addr" data-i="${i}" value="${esc(r.addr)}" placeholder="Address" aria-label="Address of listing ${i + 1}">`} <span class="sub">${meta}</span>
-          <div class="sub">${web ? `<a class="maillink" href="${esc(r.url)}" target="_blank" rel="noopener">${r.lid ? 'YGL #' + esc(r.lid) : 'Link'} ↗</a>` : 'No link'}${r.dup ? ' · already added' : ''}${r.lid && !r.found ? ' · not in tonight\'s YGL copy' : ''}</div></div>
+          <div class="sub">${web ? `<a class="maillink" href="${esc(r.url)}" target="_blank" rel="noopener">${r.lid ? 'YGL #' + esc(r.lid) : 'Link'} ↗</a>` : 'No link'}${r.dup ? ' · already added' : ''}${r.lid && !r.found ? ' · not in tonight\'s YGL copy' : ''}${r.off ? ' · ' + OFF_MARKET_MSG : ''}</div></div>
         ${optFeeSel(r.fee, `data-yr="fee" data-i="${i}" aria-label="Broker fee for ${esc(label)}"`)}
         <input data-yr="offer" data-i="${i}" value="${esc(r.offer)}" placeholder="Offer, e.g. 1 free month" aria-label="Offer for ${esc(label)}">
         <label class="yr-pick"><input type="checkbox" data-yr="pick" data-i="${i}" ${r.picked ? 'checked' : ''}> Picked</label></div>`;
@@ -2961,7 +2969,8 @@ function optionsHtml(p, d) {
   const add = !can ? '' : state.edit === 'opt:new' ? optFormHtml(null, dis, true) : state.edit === 'optpaste' ? optPasteHtml(dis) : state.edit === 'optreview' ? optReviewHtml(dis)
     : `<div class="row" style="margin-top:8px"><button class="btn small soft" data-edit="opt:new" ${dis}>+ Add option</button><button class="btn small soft" data-edit="optpaste" ${dis}>Paste a list</button></div>`;
   return `<div class="sub" id="optSummary" style="margin-bottom:4px">${opts.length ? `${picked} picked of ${opts.length} shared` : 'Add the listings you send this renter. Mark the ones they pick.'}</div>`
-    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optst:' + o.id && can && OPT.st ? optStatusHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add;
+    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optst:' + o.id && can && OPT.st ? optStatusHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add
+    + (OPT.wait ? `<div class="sub" id="yglWait" style="display:flex;align-items:center;gap:6px">${loader('Looking up on YGL…')}Looking up on YGL…</div>` : '');
 }
 const readOptForm = () => ({ address: $('#oAddr').value.trim(), rent: $('#oRent').value.trim(), beds: $('#oBeds').value, fee: $('#oFee').value, offer: $('#oOffer').value.trim(), note: $('#oNote').value.trim() });
 // One options write at a time per lead. A failure keeps the form filled and shows the message (in the form, else as a toast). If the user moved to another lead meanwhile, nothing on the new lead is touched.
@@ -3023,20 +3032,37 @@ async function optStatus(oid, status, note) {
   if (ok) await reread(id);
   return ok;
 }
-// Paste a YGL link in the address box: address, rent and beds fill from YGL (pl_ygl_lookup); the date and link are kept for the save. Not found: the link stays and a toast says to type the address.
+// v3.8: links pl_ygl_lookup did not find go to the ygl-page function (it reads the public share page). Returns Map lid → { row (same shape as a lookup row), off }. It never throws: any failure gives an empty map, so adding an option is never blocked.
+async function yglPageFill(items) {
+  const out = new Map(); if (!items.length) return out;
+  try {
+    for (const r of await api.yglPage(items.map(i => i.path)))
+      if (r && (r.status === 'ok' || r.status === 'off_market') && r.address) out.set(String(r.ygl_id), { off: r.status === 'off_market', row: { ygl_id: String(r.ygl_id), address: r.address, beds: r.beds, price: r.price, available_date: yglDate(r.available) } });   // "Now" → no date
+  } catch (_) { /* hand entry, as before v3.8 */ }
+  return out;
+}
+// Paste a YGL link in the address box: address, rent and beds fill from YGL (pl_ygl_lookup, else the ygl-page function for a miss); the date and link are kept for the save. Not found: the link stays and a toast says to type the address.
 async function yglFill() {
   const el = $('#oAddr'), id = state.open; if (!el) return;
   const v = el.value.trim(), q = parseOptionLine(v); if (!q.ygl || !q.lid) return;
   let rows;
   try { rows = await api.yglLookup([q.lid]); } catch (e) { if (state.open === id && $('#editErr')) editErr(e.message || 'The YGL lookup failed.'); return; }
-  const a = $('#oAddr'); if (state.open !== id || state.edit !== 'opt:new' || !a || a.value.trim() !== v) return;
-  const f = (rows || []).find(x => String(x.ygl_id) === q.lid);
+  const fresh = () => { const a = $('#oAddr'); return state.open === id && state.edit === 'opt:new' && a && a.value.trim() === v ? a : null; };
+  if (!fresh()) return;
+  let f = (rows || []).find(x => String(x.ygl_id) === q.lid), off = false;
+  if (!f && q.path) {
+    OPT.wait = true; busy.add('o:' + id); renderPanel();
+    const m = (await yglPageFill([q])).get(q.lid);
+    OPT.wait = false; busy.delete('o:' + id); if (state.open === id) renderPanel();
+    if (m) { f = m.row; off = m.off; }
+  }
+  const a = fresh(); if (!a) return;
   OPT.url = q.url; OPT.lid = q.lid; OPT.avail = f ? yglDate(f.available_date) : null;
   if (!f) { toast('Not in tonight\'s YGL copy. Fill in the address by hand.'); return; }
   const beds = bedsLabel(f.beds);
   a.value = addrCase(f.address); OPT.len = a.value.length; $('#oRent').value = f.price != null ? f.price : ''; $('#oBeds').value = beds;
   if (q.fee) $('#oFee').value = q.fee; if (q.offer) $('#oOffer').value = q.offer;
-  toast(`Filled from YGL: ${a.value}${f.price != null ? ', ' + money(f.price) + '/mo' : ''}${beds ? ', ' + beds : ''}. Add the fee and offer.`); $('#oFee').focus();
+  toast(off ? OFF_MARKET_MSG + ` Filled: ${a.value}${beds ? ', ' + beds : ''}.` : `Filled from YGL: ${a.value}${f.price != null ? ', ' + money(f.price) + '/mo' : ''}${beds ? ', ' + beds : ''}. Add the fee and offer.`); $('#oFee').focus();
 }
 // Look up listings: one pl_ygl_lookup call for every id, then the review table. YGL values replace typed address text; a row already on the lead starts unchecked.
 async function optLookup() {
@@ -3047,14 +3073,19 @@ async function optLookup() {
   const ids = [...new Set(rows.map(r => r.lid).filter(Boolean))];
   if (ids.length > OPT_MAX_IDS) { editErr(`Paste at most ${OPT_MAX_IDS} YGL links at a time (there are ${ids.length}).`); return; }
   const key = 'o:' + id; if (busy.has(key)) return;
-  busy.add(key); renderPanel();
-  let found = new Map(), err = '';
-  try { if (ids.length) found = new Map((await api.yglLookup(ids)).map(x => [String(x.ygl_id), x])); } catch (e) { err = e.message || 'The YGL lookup failed.'; }
-  busy.delete(key);
+  busy.add(key); OPT.wait = true; renderPanel();
+  let found = new Map(), pages = new Map(), err = '';
+  try {
+    if (ids.length) found = new Map((await api.yglLookup(ids)).map(x => [String(x.ygl_id), x]));
+    const miss = rows.filter(r => r.lid && r.path && !found.has(r.lid));   // v3.8: only the misses go to the ygl-page function
+    if (miss.length) pages = await yglPageFill(miss);
+  } catch (e) { err = e.message || 'The YGL lookup failed.'; }
+  busy.delete(key); OPT.wait = false;
   if (state.open !== id) return;
   if (err) { renderPanel(); editErr(err); return; }   // the paste box stays filled
   rows.forEach(r => {
-    const f = r.lid ? found.get(r.lid) : null;
+    const pg = r.lid && !found.has(r.lid) ? pages.get(r.lid) : null, f = r.lid ? found.get(r.lid) || (pg && pg.row) : null;
+    if (pg && f === pg.row) r.off = pg.off;
     if (f) { r.addr = addrCase(f.address); r.rent = f.price != null ? f.price : null; r.beds = bedsLabel(f.beds); r.avail = yglDate(f.available_date); r.found = true; }
     r.dup = d.options.some(o => (r.lid && String(o.ygl_listing_id) === r.lid) || (r.url && o.url === r.url));
     r.inc = !r.dup;
@@ -4448,7 +4479,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.7';
+const APP_VERSION = '3.8';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
