@@ -2697,7 +2697,7 @@ function renderPanel() {
       const NI = { note: ['nt', 'N'], text_log: ['tx', 'T'], calendly: ['cl', 'C'], system: ['sy', '•'], import: ['sy', 'I'] };
       const items = [
         ...d.notes.map(n => { const k = String(n.kind || 'note').replace(/[^a-z_]/g, ''), ic = NI[k] || NI.note; return { id: String(n.id), t: Date.parse(n.created_at) || 0, k: k === 'system' ? 'updates' : 'notes', html: `<div class="fi" data-fitem="note">${ico(ic[0], ic[1])}<div class="grow">${noteHtml(n, p, true)}</div></div>` }; }),
-        ...rowsA.map(a => { const gone = a.canceled === true || a.canceled_at != null; return { id: String(a.id), t: Date.parse(a.starts_at) || 0, k: 'showings', html: `<div class="fi" data-fitem="showing">${gone ? ico('cx', '×') : ico('ap', '◷')}<div class="grow">${showingRowHtml(a, links, now, true)}</div></div>` }; }),
+        ...rowsA.map(a => { const gone = a.canceled === true || a.canceled_at != null; return { id: String(a.id), t: Date.parse(a.starts_at) || 0, k: 'showings', html: `<div class="fi" data-fitem="showing">${gone ? ico('cx', '×') : ico('ap', '◷')}<div class="grow">${showingRowHtml(a, links, now, true, false, ft === 'showings')}</div></div>` }; }),
         ...optEvents(d.options || []).map(e => ({ id: 'o' + e.id, t: e.t, k: 'updates', html: `<div class="fi" data-fitem="options">${ico(NI.system[0], NI.system[1])}<div class="grow">${noteHtml({ id: 'o' + e.id, kind: 'system', author_id: e.by, body: e.text, created_at: e.at }, null, true)}</div></div>` })),   // v3.6: "Added 3 options", under All only
       ].sort((x, y) => y.t - x.t || (x.id < y.id ? -1 : 1));
       const cnt = (k) => k === 'all' ? items.length : k === 'options' ? (d.options || []).length : items.filter(x => x.k === k).length;
@@ -4251,8 +4251,8 @@ function showingsHtml(p, compact) {
   const links = rescheduleLinks(e.rows), now = Date.now();
   return add + e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => showingRowHtml(a, links, now, false, compact)).join('');
 }
-// One showing. inTimeline (v2.5 full page): no data-shrow and no buttons, so the right-hand Showings card stays the one place to act.
-function showingRowHtml(a, links, now, inTimeline, compact) {
+// One showing. inTimeline (v2.5 full page): no data-shrow and no buttons. tabActs (v4.1): on the middle Showings tab the buttons show too (Greg 2026-11-04: no edit there).
+function showingRowHtml(a, links, now, inTimeline, compact, tabActs) {
     const t = Date.parse(a.starts_at), gone = a.canceled === true || a.canceled_at != null, lk = links.get(a.id);
     const who = a.canceled_by ? (firstName(a.canceled_by) || 'Team member') : 'Calendly';
     const note = a.cancel_note && !cancelByCalendly(a) ? `<br>${esc(a.cancel_note)}` : '';
@@ -4263,7 +4263,7 @@ function showingRowHtml(a, links, now, inTimeline, compact) {
     return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
       <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}${a.mode === 'virtual' ? ' · Virtual' : ''}</div>${stopsListHtml(a, compact)}
       ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
-      ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && !inTimeline ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
+      ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && (!inTimeline || tabActs) ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
 }
 $('#panel').addEventListener('click', e => {
   const c = e.target.closest('[data-apptcancel]'), r = e.target.closest('[data-appteditreason]');
@@ -4545,7 +4545,7 @@ function renderRenew() {
     ${linkRows.length ? `<div class="bulkrow"><label class="contacted"><input type="checkbox" id="cfAll" ${nSel && nSel === Math.min(CONFIRM_MAX, linkRows.length) ? 'checked' : ''} ${running ? 'disabled' : ''}>Select the ${CONFIRM_MAX} that expire soonest</label><button class="btn small primary" id="cfGo" ${nSel && !running ? '' : 'disabled'}>Confirm selected (${nSel})</button></div>
     ${R.capNote || linkRows.length > CONFIRM_MAX ? `<div class="sub" id="cfCap">${esc(CAP_MSG)}</div>` : ''}` : ''}
     ${B && B.blocked ? `<div class="bulkrow bad" id="cfBlocked">${esc(BLOCKED_MSG)}</div>` : ''}
-    ${B && B.running ? `<div class="bulkrow"><b class="num" id="cfProg">Opening ${B.cur || 1} of ${B.total}…</b><button class="btn small" id="cfStop" ${B.stop ? 'disabled' : ''}>Stop</button></div>` : ''}
+    ${B && B.running ? `<div class="bulkrow"><b class="num" id="cfProg">${B.waitUntil ? cfWaitText(B) : `Opening ${B.cur || 1} of ${B.total}…`}</b>${B.waitUntil ? '' : `<button class="btn small" id="cfStop" ${B.stop ? 'disabled' : ''}>Stop</button>`}</div>` : ''}
     ${B && B.finished ? `<div class="bulkrow" id="cfDone"><span>Opened ${B.opened.length} confirm page${B.opened.length === 1 ? '' : 's'} in Zillow (${B.failed.length} failed${B.failed.length ? ': ' + esc([...new Set(B.failed.map(f => f.reason))].join('; ')) : ''}). Did Zillow confirm ${B.opened.length === 1 ? 'it' : 'them'}?</span>${B.opened.length ? `<button class="btn small primary" id="cfMarkAll" ${B.marking ? 'disabled' : ''}>Mark all ${B.opened.length} as renewed</button>` : ''}<button class="btn small" id="cfNotYet" ${B.marking ? 'disabled' : ''}>Not yet</button></div>` : ''}</div>` : '';
   const expTable = expiring.length ? `${cfBar}<table>${head(['Listing', 'Account', 'Expires', 'Last notice', ''])}<tbody>${expiring.map(l => {
     const d = l.expires_on ? dateOnly(l.expires_on) : null, days = d ? daysFromToday(d) : null;
@@ -4567,11 +4567,12 @@ function renderRenew() {
 // More than 10 tabs in a row makes Zillow ask if we are human, so one click opens at most CONFIRM_MAX listings.
 const CONFIRM_MAX = 10;
 const CONFIRM_STAGGER_MS = 3000;   // tabs open one at a time, this far apart
-const CONFIRM_WAIT_MS = 30000;     // after the LAST tab opens: wait, then close the tabs
+const CONFIRM_WAIT_MS = 10000;     // after the LAST tab opens: wait, then close the tabs (v4.2: 30 s → 10 s, Greg 2026-11-04 "takes too long")
 let confirmStaggerMs = CONFIRM_STAGGER_MS, confirmWaitMs = CONFIRM_WAIT_MS;   // the harness can shorten these
 const BLOCKED_MSG = 'Your browser blocked the pop-ups. Click the pop-up icon at the right of the address bar, choose Always allow pop-ups from greglee722.github.io, then click Confirm selected again.';
 const CAP_MSG = "You can confirm up to 10 at a time. Opening more makes Zillow ask if you're human. Confirm these 10, then select the next ones.";
 const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+const cfWaitText = (B) => `Waiting for Zillow… closing tabs in ${Math.max(1, Math.ceil((B.waitUntil - Date.now()) / 1000))}s`;
 const confirmable = (l) => l && l.status === 'expiring' && !l.dismissed_at && state.renew.cOn && !state.renew.cErr && state.renew.confirm.has(Number(l.id));
 const bySoonest = (a, b) => String(a.expires_on || '9999').localeCompare(String(b.expires_on || '9999')) || String(a.listing_address || '').localeCompare(String(b.listing_address || ''));
 function confirmSelectedClick() {
@@ -4599,7 +4600,11 @@ async function runConfirm(first) {
     } catch (e) { try { w.close(); } catch (_) {} B.failed.push({ id, reason: e.message || 'Could not open the confirm page.' }); }
     B.done++; renderRenew();
   }
-  if (tabs.length) await sleepMs(confirmWaitMs);
+  if (tabs.length) {   // v4.2: a countdown instead of "Opening N of N…" while the last tabs load
+    B.waitUntil = Date.now() + confirmWaitMs; renderRenew();
+    const tick = setInterval(() => { const e = $('#cfProg'); if (e && B.waitUntil) e.textContent = cfWaitText(B); }, 1000);
+    await sleepMs(confirmWaitMs); clearInterval(tick); B.waitUntil = 0;
+  }
   tabs.forEach(w => { try { w.close(); } catch (_) {} });
   B.running = false; B.finished = true; R.sel.clear();
   renderRenew();
@@ -4688,7 +4693,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.1';
+const APP_VERSION = '4.2';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
