@@ -369,6 +369,15 @@ textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--
 .reasons label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .err { color: var(--bad); font-size: 13px; }
 
+/* + Showing (v4.0) */
+.shform { display: grid; gap: 10px; min-width: 0; } .shform input, .shform select, .shform textarea { max-width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.shform textarea, .shform input:not([type=date]):not([type=time]):not([type=number]) { width: 100%; } .shform textarea { min-height: 54px; }
+.shstops2 { display: grid; gap: 8px; min-width: 0; } .shstop { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; } .shstop-h { flex-wrap: nowrap; gap: 6px; } .shstop-h b { overflow-wrap: anywhere; }
+.shnum2 { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.shadd { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; } .shadd > select, .shadd > .sub, .shadd > input:first-of-type, .shadd > button { grid-column: 1 / -1; }
+.shtext { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.shstops { margin: 4px 0 0; padding-left: 20px; display: grid; gap: 4px; } .shstops li { overflow-wrap: anywhere; }
+
 /* Calendar */
 .cal-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .cal-head h1 { font-size: 24px; font-weight: 700; margin: 0; }
@@ -922,7 +931,7 @@ const PERSON_COLS_BASE = 'id,merged_into,first_name,last_name,owner_id,stage_id,
 const PERSON_COLS = PERSON_COLS_BASE.replace('source,', 'source,zillow_account,');   // zillow_account comes from supabase/08
 const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by,note,off_market';   // v3.6: lead_options; v3.7: note (supabase/21); v3.9: off_market (supabase/22)
-const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email';
+const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email,listings,mode,prep_note,created_by';   // v4.0: listings, mode, prep_note (supabase/23), created_by
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
 const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
 const AREA_COLS = 'id,street,zip,from_no,to_no,area,draft,created_by,created_at,updated_at';
@@ -983,7 +992,7 @@ function makeApi(url, key) {
       return { notes: ok(notes), inquiries: ok(inquiries), collaborators: ok(collaborators), options: ok(options) };
     },
     async appointments(fromIso, toIso) {
-      return ok(await sb.from('appointments').select('id,member_id,person_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email,fub_id')
+      return ok(await sb.from('appointments').select('id,member_id,person_id,calendar_event_id,created_by,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,invitee_email,fub_id')
         .gte('starts_at', fromIso).lt('starts_at', toIso).eq('canceled', false).is('canceled_at', null).order('starts_at'));
     },
     // v2.2: the same rows plus canceled ones and the columns the Calendar, report and cancel flow need.
@@ -999,6 +1008,8 @@ function makeApi(url, key) {
       return r && r[0] ? r[0].starts_at : null;
     },
     // One update by id. Row-level security can turn it into a silent no-op, so the rows come back and the caller checks for 0.
+    // v4.0: a showing made in LoopIn (supabase/23). Row-level security: an agent may insert only member_id = self for a lead they can see.
+    async addAppt(row) { return ok(await sb.from('appointments').insert(row).select(APPT_COLS).single()); },
     async updateAppt(id, patch) { return ok(await sb.from('appointments').update(patch).eq('id', id).select(APPT_COLS)); },
     // Collaborators for the leads that have appointments, in chunks of 200 ids so the request URL stays short.
     async apptCollaborators(personIds) {
@@ -2970,6 +2981,7 @@ function optionsHtml(p, d) {
   const add = !can ? '' : state.edit === 'opt:new' ? optFormHtml(null, dis, true) : state.edit === 'optpaste' ? optPasteHtml(dis) : state.edit === 'optreview' ? optReviewHtml(dis)
     : `<div class="row" style="margin-top:8px"><button class="btn small soft" data-edit="opt:new" ${dis}>+ Add option</button><button class="btn small soft" data-edit="optpaste" ${dis}>Paste a list</button></div>`;
   return `<div class="sub" id="optSummary" style="margin-bottom:4px">${opts.length ? `${picked} picked of ${opts.length} shared` : 'Add the listings you send this renter. Mark the ones they pick.'}</div>`
+    + (can && picked ? `<div class="row" style="margin-bottom:4px"><button class="btn small soft" data-newshowing="${esc(p.id)}" ${dis}>Schedule a showing</button></div>` : '')   // v4.0
     + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optst:' + o.id && can && OPT.st ? optStatusHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add
     + (OPT.wait ? `<div class="sub" id="yglWait" style="display:flex;align-items:center;gap:6px">${loader('Looking up on YGL…')}Looking up on YGL…</div>` : '');
 }
@@ -3451,9 +3463,9 @@ function renderDash() {
   const next = today.find(x => x.t >= Date.now());
   const todayG = groupBook(today), comingG = groupBook(coming), nextG = next && todayG.find(g => g.as.includes(next.a));
   // Showings today (Greg 2026-10-30): counted like showingStats (showing kinds, no FUB copies, a double booking once),
-  // and only when the lead is in Options Picked/Complete Showing. Stages arrive with the 02:30 FUB sync.
+  // and only when the lead is in Options Picked/Complete Showing (v4.0: a showing made in LoopIn counts at any stage). Stages arrive with the 02:30 FUB sync.
   const showStage = state.stages.find(s => /^options picked/i.test(s.name));
-  const inShowStage = (a) => { const p = a.person_id ? byId.get(a.person_id) : null; return !!(p && showStage && p.stage_id === showStage.id); };
+  const inShowStage = (a) => { if (loopinMade(a)) return true; const p = a.person_id ? byId.get(a.person_id) : null; return !!(p && showStage && p.stage_id === showStage.id); };
   const showToday = groupBook(today.filter(x => isShowing(x.a) && x.a.fub_id == null && inShowStage(x.a)));
   const nextShow = showToday.find(g => g.ts.some(t => t >= Date.now())), showWait = state.loading || state.loadFailed;   // a lead not loaded yet would count as 0
   const apptsOf = (id) => showWait ? '…' : showToday.filter(g => g.a.member_id === id).length;
@@ -4238,9 +4250,10 @@ function showingsHtml(p) {
   const e = state.leadAppts.get(p.id);
   if (!e || (!e.rows && !e.err)) return loader();
   if (!e.rows) return `<div class="err-s">${esc(e.err)}</div>`;
-  if (!e.rows.length) return '<div class="sub">No showings yet.</div>';
+  const add = canEdit(p) ? `<div class="row" style="margin-bottom:6px"><button class="btn small soft" data-newshowing="${esc(p.id)}">+ Showing</button></div>` : '';   // v4.0
+  if (!e.rows.length) return add + '<div class="sub">No showings yet.</div>';
   const links = rescheduleLinks(e.rows), now = Date.now();
-  return e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => showingRowHtml(a, links, now)).join('');
+  return add + e.rows.slice().sort((x, y) => Date.parse(y.starts_at) - Date.parse(x.starts_at) || (x.id < y.id ? -1 : 1)).map(a => showingRowHtml(a, links, now)).join('');
 }
 // One showing. inTimeline (v2.5 full page): no data-shrow and no buttons, so the right-hand Showings card stays the one place to act.
 function showingRowHtml(a, links, now, inTimeline) {
@@ -4248,9 +4261,11 @@ function showingRowHtml(a, links, now, inTimeline) {
     const who = a.canceled_by ? (firstName(a.canceled_by) || 'Team member') : 'Calendly';
     const note = a.cancel_note && !cancelByCalendly(a) ? `<br>${esc(a.cancel_note)}` : '';
     const acts = (isShowing(a) && !gone && t > now && mayCancel(a) ? `<button class="btn small" data-apptcancel="${esc(a.id)}">Cancel showing</button>` : '')
-      + (isShowing(a) && gone && mayCancel(a) ? `<button class="btn small" data-appteditreason="${esc(a.id)}">Edit reason</button>` : '');
+      + (isShowing(a) && gone && mayCancel(a) ? `<button class="btn small" data-appteditreason="${esc(a.id)}">Edit reason</button>` : '')
+      + (isShowing(a) && !gone && mayCancel(a) ? `<button class="btn small" data-shedit="${esc(a.id)}" aria-label="Edit stops and notes">Edit stops</button>` : '')   // v4.0
+      + (isShowing(a) && !gone && (stopsOf(a).length || a.prep_note || loopinMade(a)) ? shareBtns(a) : '');
     return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
-      <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}</div>
+      <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}${a.mode === 'virtual' ? ' · Virtual' : ''}</div>${stopsListHtml(a)}
       ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
       ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && !inTimeline ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
 }
@@ -4260,6 +4275,195 @@ $('#panel').addEventListener('click', e => {
   const rows = (state.leadAppts.get(state.open) || {}).rows || [], a = rows.find(x => x.id === id);
   if (!a) return;
   if (c) askCancel(a); else if (mayCancel(a)) cancelForm(a, true); else toast('You can only change your own showings.');
+});
+
+// ───────── + Showing (v4.0; supabase/23 prep_note) ─────────
+// A showing made in LoopIn is one appointments row with no event id. Its stops live in appointments.listings, in route order:
+// [{ option_id, address, rent, beds, fee, offer, key, note }]. The calendar sync never cancels a row with no event id, and a Calendly booking
+// for the same lead within 30 minutes adopts the row (the sync keeps kind, mode, listings and prep_note). Stops start as the lead's Picked options in
+// the order they were shared (lead_options has no picked-at time, so shared_at order is the nearest thing).
+const SH_LENS = [[30, '30 min'], [60, '1 h'], [90, '1.5 h'], [120, '2 h']];
+const SH_MODES = { in_person: 'In person', virtual: 'Virtual' };
+let SH = null;   // the open form: { pid, aid, full, date, time, len, kind, mode, member, stops, prep, add*, busy, saved }
+const loopinMade = (a) => a.calendar_event_id == null && a.fub_id == null && a.created_by != null;
+const stopsOf = (a) => Array.isArray(a.listings) ? a.listings.filter(s => s && typeof s === 'object') : [];
+const lenLabel = (min) => { const k = SH_LENS.find(x => x[0] === min); return k ? k[1] : min < 60 ? min + ' min' : +(min / 60).toFixed(1) + ' h'; };
+const money2 = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
+const dashPhone = (p) => { const d = String(p || '').replace(/\D/g, ''), t = d.length === 11 && d[0] === '1' ? d.slice(1) : d; return t.length === 10 ? `${t.slice(0, 3)}-${t.slice(3, 6)}-${t.slice(6)}` : String(p || ''); };
+const stopRent = (s) => s.rent != null && s.rent !== '' && !isNaN(s.rent) ? +s.rent : null;
+// Move-in line from the rent and the fee tag: first, last and security are one month each; the fee is $0 (no fee), half a month, or one month. With no fee tag the fee is left out.
+function moveInLine(rent, fee) {
+  const f = fee === 'none' ? 0 : fee === 'half' ? rent / 2 : fee === 'full' ? rent : null;
+  return `Move-in: first ${money2(rent)} · last ${money2(rent)} · security ${money2(rent)}` + (f == null ? '' : ` · fee ${money2(f)}`);
+}
+// The plain text of a showing, for Share, Text me this and Copy.
+function itineraryText(a) {
+  const p = a.person_id ? byId.get(a.person_id) : null, t = Date.parse(a.starts_at), e = Date.parse(a.ends_at), min = e > t ? Math.round((e - t) / 6e4) : 60;
+  const ln = p && p.last_name ? Array.from(String(p.last_name).trim())[0] : '', who = p ? [String(p.first_name || '').trim(), ln ? ln + '.' : ''].filter(Boolean).join(' ') : '';
+  const where = a.mode === 'virtual' ? 'virtual' : a.mode === 'in_person' ? 'in person' : '';
+  const out = [`${KINDS[kindOf(a)]}${who ? ' · ' + who : ''} · ${fmtDT(t)} (${lenLabel(min)}${where ? ', ' + where : ''})`];
+  const ph = p && p.person_phones && p.person_phones[0] ? dashPhone(p.person_phones[0].phone) : '';
+  if (ph) out.push('Renter: ' + ph);
+  const ind = (s) => String(s).trim().replace(/\n/g, '\n   ');
+  stopsOf(a).forEach((s, i) => {
+    const r = stopRent(s);
+    out.push(`${i + 1}. ` + [s.address, r != null ? money2(r) : '', s.beds, OPT_FEE[s.fee], s.offer].filter(x => x && String(x).trim()).join(' · '));
+    if (s.key && String(s.key).trim()) out.push('   Keys: ' + ind(s.key));
+    if (s.note && String(s.note).trim()) out.push('   Notes: ' + ind(s.note));
+  });
+  if (a.prep_note && String(a.prep_note).trim()) out.push('Note: ' + String(a.prep_note).trim());
+  return out.join('\n').replace(/[  ]/g, ' ');
+}
+// iPhone, iPad and Mac Messages read sms:<num>&body=; Android reads sms:<num>?body=. With no number the link opens Messages with no recipient.
+function smsHref(phone, body, ua = navigator.userAgent || '') {
+  const d = String(phone || '').replace(/\D/g, ''), num = d.length === 10 ? '+1' + d : d.length === 11 && d[0] === '1' ? '+' + d : d;
+  return 'sms:' + num + (/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(ua) ? '&' : '?') + 'body=' + encodeURIComponent(body);
+}
+const myPhone = () => { const m = state.me ? state.teamMap.get(state.me.id) : null; return m && m.phone ? String(m.phone).trim() : ''; };
+function shareBtns(a) {
+  const txt = itineraryText(a), ph = myPhone(), id = esc(a.id);
+  return `${navigator.share ? `<button class="btn small" data-shshare="${id}">Share</button>` : ''}<a class="btn small" data-shsms="${id}" href="${esc(smsHref(ph, txt))}">Text me this</a><button class="btn small" data-shcopy="${id}">Copy</button>`
+    + (ph ? '' : '<span class="sub" data-shnophone>Add your phone in Settings → Team to text it to yourself.</span>');
+}
+const stopMeta = (s) => { const r = stopRent(s); return [r != null ? esc(money(r)) + '/mo' : '', s.beds ? esc(s.beds) : ''].filter(Boolean).join(' · '); };
+function stopsListHtml(a) {
+  const st = stopsOf(a); if (!st.length) return '';
+  return `<ol class="shstops">${st.map(s => `<li><b>${esc(s.address)}</b>${stopMeta(s) ? ` <span class="sub">${stopMeta(s)}</span>` : ''}${optPills({ broker_fee: OPT_FEE[s.fee] ? s.fee : '', offer: s.offer })}`
+    + `${s.key ? `<div class="sub">Keys: ${esc(s.key)}</div>` : ''}${s.note ? `<div class="sub" style="white-space:pre-wrap">Notes: ${esc(s.note)}</div>` : ''}</li>`).join('')}</ol>`
+    + (a.prep_note ? `<div class="sub" style="white-space:pre-wrap">Note: ${esc(a.prep_note)}</div>` : '');
+}
+const shAppt = (id) => (SH && SH.saved && SH.saved.id === id ? SH.saved : null) || findAppt(id);
+const shErr = (m) => { const e = $('#shErr'); if (e) e.textContent = m; return false; };
+function shStopFromOpt(o) { return { oid: o.id, address: o.address, rent: o.rent, beds: o.beds || '', fee: o.broker_fee || '', offer: o.offer || '', off: !!o.off_market, key: '', note: '' }; }
+function openShowingForm(pid, aid) {
+  const p = byId.get(pid); if (!p) return;
+  const a = aid ? findAppt(aid) : null, opts = state.open === pid && state.detail ? state.detail.options : null;
+  if (aid && !a) return;
+  if (a ? !mayCancel(a) : !canEdit(p)) { toast(a ? 'You can only change your own showings.' : readOnlyWhy(p)); return; }
+  if (!a && !opts) { toast('Still loading. Try again in a moment.'); return; }
+  const mk = (s) => { const o = opts && s.option_id ? opts.find(x => x.id === s.option_id) : null; return { oid: s.option_id || null, address: String(s.address || ''), rent: stopRent(s), beds: s.beds || '', fee: OPT_FEE[s.fee] ? s.fee : '', offer: s.offer || '', off: !!(o && o.off_market), key: s.key || '', note: s.note || '' }; };
+  const own = p.owner_id && state.teamMap.get(p.owner_id), d0 = a ? new Date(Date.parse(a.starts_at)) : new Date(), min = a && Date.parse(a.ends_at) > Date.parse(a.starts_at) ? Math.round((Date.parse(a.ends_at) - Date.parse(a.starts_at)) / 6e4) : 60;
+  SH = { pid, aid: a ? a.id : null, full: !a || loopinMade(a), date: localKey(d0), time: a ? `${pad2(d0.getHours())}:${pad2(d0.getMinutes())}` : '', len: min, kind: a && a.kind === 'reshow' ? 'reshow' : 'showing', mode: a ? a.mode || 'in_person' : 'in_person',
+    member: a ? a.member_id : own && own.active ? own.id : state.me.id, startAt: a ? a.starts_at : null,
+    stops: a ? stopsOf(a).map(mk) : opts.filter(o => o.status === 'picked').map(shStopFromOpt), prep: a ? a.prep_note || '' : '', addSel: '', addTxt: '', addRent: '', addFee: '', busy: false, saved: null };
+  shRender();
+}
+function shRead() {
+  const m = $('#modal'); if (!SH || !m || !m.querySelector('#shForm')) return;
+  const v = (id) => { const e = m.querySelector('#' + id); return e ? e.value : undefined; };
+  if (SH.full) { SH.date = v('shDate'); SH.time = v('shTime'); SH.len = +v('shLen'); SH.kind = v('shKind'); SH.mode = v('shMode'); if (v('shAgent') !== undefined) SH.member = v('shAgent'); }
+  SH.prep = v('shPrep'); SH.addSel = v('shAddSel'); SH.addTxt = v('shAddTxt'); SH.addRent = v('shAddRent'); SH.addFee = v('shAddFee');
+  m.querySelectorAll('[data-sk]').forEach(e => { if (SH.stops[+e.dataset.sk]) SH.stops[+e.dataset.sk].key = e.value; });
+  m.querySelectorAll('[data-sn]').forEach(e => { if (SH.stops[+e.dataset.sn]) SH.stops[+e.dataset.sn].note = e.value; });
+}
+function shFormHtml() {
+  const S = SH, p = byId.get(S.pid), mgr = isMgr(), opts = state.detail && state.open === S.pid ? state.detail.options : [];
+  const lens = SH_LENS.some(x => x[0] === S.len) ? SH_LENS : [...SH_LENS, [S.len, lenLabel(S.len)]].sort((x, y) => x[0] - y[0]);
+  const agents = state.team.filter(m => m.active || m.id === S.member);
+  const top = S.full ? `<div class="fields"><div class="field"><label for="shDate">Date</label><input type="date" id="shDate" value="${esc(S.date)}"></div>
+      <div class="field"><label for="shTime">Start time</label><input type="time" id="shTime" step="900" value="${esc(S.time)}"></div>
+      <div class="field"><label for="shLen">Length</label><select id="shLen">${lens.map(([m, t]) => `<option value="${m}" ${m === S.len ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+      <div class="field"><label for="shKind">Type</label><select id="shKind"><option value="showing" ${S.kind === 'showing' ? 'selected' : ''}>Showing</option><option value="reshow" ${S.kind === 'reshow' ? 'selected' : ''}>Reshow</option></select></div>
+      <div class="field"><label for="shMode">Where</label><select id="shMode">${Object.entries(SH_MODES).map(([k, t]) => `<option value="${k}" ${S.mode === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      ${mgr ? `<div class="field"><label for="shAgent">Agent</label><select id="shAgent">${agents.map(m => `<option value="${esc(m.id)}" ${m.id === S.member ? 'selected' : ''}>${esc(m.full_name)}</option>`).join('')}</select></div>` : ''}</div>`
+    : `<div class="sub" id="shFixed">${esc(fmtDT(Date.parse(S.startAt)))} · time and length stay with Calendly</div>`;
+  const stops = S.stops.map((s, i) => `<div class="shstop" data-shstop="${i}"><div class="row shstop-h"><span class="shnum2">${i + 1}</span><b class="grow">${esc(s.address)}</b>
+      <button class="btn small" data-stopup="${i}" aria-label="Move stop ${i + 1} up" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn small" data-stopdn="${i}" aria-label="Move stop ${i + 1} down" ${i === S.stops.length - 1 ? 'disabled' : ''}>▼</button><button class="btn small" data-stoprm="${i}" aria-label="Remove stop ${i + 1}">×</button></div>
+      <div class="sub">${stopMeta(s)}${optPills({ broker_fee: s.fee, offer: s.offer })}${s.off ? ' <span class="pill off-tag">Off market</span>' : ''}</div>
+      <input data-sk="${i}" maxlength="200" value="${esc(s.key)}" placeholder="Key info (optional), e.g. Lockbox on the back door, code from the LL" aria-label="Key info for stop ${i + 1}">
+      <textarea data-sn="${i}" placeholder="Notes (optional): move-in costs, utilities, parking, pets" aria-label="Notes for stop ${i + 1}">${esc(s.note)}</textarea>
+      <div><button class="btn small" data-movein="${i}">Add move-in line</button></div></div>`).join('');
+  const have = new Set(S.stops.map(s => s.oid).filter(Boolean)), avail = opts.filter(o => o.status !== 'not_interested' && !have.has(o.id));
+  return `<h3 id="shTitle">${S.aid ? 'Edit showing' : '+ Showing'} · ${esc(p ? p._name || 'Lead' : 'Lead')}</h3>
+    <div class="shform" id="shForm">${top}
+      <div class="shstops2">${stops || '<div class="sub" id="shNoStops">No stops yet. Add one below.</div>'}</div>
+      <div class="shadd"><select id="shAddSel" aria-label="Add a shared option"><option value="">Add an option from this lead…</option>${avail.map(o => `<option value="${esc(o.id)}" ${S.addSel === o.id ? 'selected' : ''}>${esc(o.address)}${o.status === 'picked' ? ' (picked)' : ''}</option>`).join('')}</select>
+        <div class="sub">or type an address</div>
+        <input id="shAddTxt" value="${esc(S.addTxt)}" placeholder="Address" aria-label="Address of a new stop"><input id="shAddRent" type="number" min="0" step="any" value="${esc(S.addRent)}" placeholder="$/mo" aria-label="Rent of a new stop">
+        ${optFeeSel(S.addFee, 'id="shAddFee" aria-label="Broker fee of a new stop"')}<button class="btn small" data-addstop>+ Add stop</button></div>
+      <div class="field"><label for="shPrep">Showing note (optional)</label><textarea id="shPrep" placeholder="Meeting spot, what the renter cares about">${esc(S.prep)}</textarea></div>
+      <div class="err" id="shErr"></div>
+      <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn primary" id="shSave" ${S.busy ? 'disabled' : ''}>${S.aid ? 'Save changes' : 'Save showing'}</button></div></div>`;
+}
+function shRender(focus) {
+  const card = $('#modal .modal-card'), top = card ? card.scrollTop : 0;
+  showModal(SH.saved ? shDoneHtml() : shFormHtml());
+  const c = $('#modal .modal-card'); if (c) c.scrollTop = top;
+  const f = focus && $('#modal ' + focus); if (f && !f.disabled) f.focus();
+}
+function shDoneHtml() {
+  const a = SH.saved;
+  return `<h3 id="shTitle">Showing saved</h3><div class="shform" id="shDone"><pre class="shtext" id="shText">${esc(itineraryText(a))}</pre>
+    <div class="row">${shareBtns(a)}</div><div class="row" style="justify-content:flex-end"><button class="btn primary" data-close>Done</button></div></div>`;
+}
+$('#modal').addEventListener('click', e => {
+  const t = e.target; if (!SH || !t.closest('#shForm')) return;
+  shRead();
+  let b;
+  if ((b = t.closest('[data-stopup]')) || (b = t.closest('[data-stopdn]'))) {
+    const up = !!b.dataset.stopup, i = +(up ? b.dataset.stopup : b.dataset.stopdn), j = up ? i - 1 : i + 1;
+    if (j >= 0 && j < SH.stops.length) { [SH.stops[i], SH.stops[j]] = [SH.stops[j], SH.stops[i]]; shRender(`[data-${up ? 'stopup' : 'stopdn'}="${j}"]`); }
+  } else if ((b = t.closest('[data-stoprm]'))) { SH.stops.splice(+b.dataset.stoprm, 1); shRender(); }
+  else if ((b = t.closest('[data-movein]'))) {
+    const s = SH.stops[+b.dataset.movein], r = stopRent(s);
+    if (!(r > 0)) { shErr('This stop has no rent. Type the move-in line by hand.'); return; }
+    const line = moveInLine(r, s.fee);
+    s.note = /^Move-in:.*$/m.test(s.note) ? s.note.replace(/^Move-in:.*$/m, line) : (s.note.trim() ? s.note.replace(/\s+$/, '') + '\n' : '') + line;
+    shRender(`[data-sn="${b.dataset.movein}"]`);
+  } else if (t.closest('[data-addstop]')) {
+    const opts = state.detail && state.open === SH.pid ? state.detail.options : [], o = SH.addSel ? opts.find(x => x.id === SH.addSel) : null, adr = addrCase(SH.addTxt || '');
+    if (SH.stops.length >= 20) { shErr('A showing can have up to 20 stops.'); return; }
+    if (o) SH.stops.push(shStopFromOpt(o));
+    else if (adr) { const r = SH.addRent === '' || SH.addRent == null ? null : Number(SH.addRent); if (r != null && !(r >= 0)) { shErr('Rent must be a number.'); return; } SH.stops.push({ oid: null, address: adr, rent: r, beds: '', fee: SH.addFee || '', offer: '', off: false, key: '', note: '' }); }
+    else { shErr('Pick an option or type an address.'); return; }
+    SH.addSel = SH.addTxt = SH.addRent = SH.addFee = ''; shRender('#shAddSel');
+  } else if (t.closest('#shSave')) shSave();
+});
+async function shSave() {
+  if (!SH || SH.busy) return; shRead();
+  const S = SH, p = byId.get(S.pid), a = S.aid ? findAppt(S.aid) : null;
+  if (!p || (S.aid && !a)) return shErr('This lead is no longer loaded.');
+  if (a ? !mayCancel(a) : !canEdit(p)) return shErr(a ? 'You can only change your own showings.' : readOnlyWhy(p));
+  const listings = S.stops.map(s => ({ option_id: s.oid || null, address: s.address, rent: stopRent(s), beds: s.beds || null, fee: s.fee || null, offer: s.offer || '', key: String(s.key).trim(), note: String(s.note).trim() }));
+  const prep = String(S.prep || '').trim(), mgr = isMgr(), member = mgr && state.teamMap.has(S.member) ? S.member : state.me.id;
+  let timing = null;
+  if (S.full) {
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(S.date || '') && /^\d{2}:\d{2}$/.test(S.time || '') ? new Date(`${S.date}T${S.time}`) : null;   // local time: the agent is in Boston
+    if (!start || isNaN(start)) return shErr('Pick a date and a start time.');
+    timing = { start, ends_at: new Date(+start + (S.len > 0 ? S.len : 60) * 6e4).toISOString() };
+  }
+  const btn = $('#shSave'); S.busy = true; if (btn) btn.disabled = true;
+  let row;
+  try {
+    if (a) {
+      const patch = timing ? { starts_at: timing.start.toISOString(), ends_at: timing.ends_at, kind: S.kind, mode: S.mode, listings, prep_note: prep } : { listings, prep_note: prep };
+      if (timing && mgr && member !== a.member_id) patch.member_id = member;
+      const rows = await api.updateAppt(a.id, patch);
+      if (!rows || !rows.length) throw new Error(NO_ACCESS);
+      row = rows[0];
+    } else row = await api.addAppt({ member_id: member, person_id: p.id, starts_at: timing.start.toISOString(), ends_at: timing.ends_at, title: 'Showing · ' + (p._name || 'Lead'), kind: S.kind, mode: S.mode, listings, prep_note: prep, created_by: state.me.id, calendar_event_id: null });
+  } catch (e) { S.busy = false; const b2 = $('#shSave'); if (b2) b2.disabled = false; toast(e.message || 'Not saved.'); return shErr(e.message || 'Not saved.'); }
+  S.busy = false;
+  if (!a) {
+    try {
+      const n = listings.length, note = await api.addNote(p.id, state.me.id, `Showing booked ${fmtDT(Date.parse(row.starts_at)).replace(/[  ]/g, ' ')} · ${n} stop${n === 1 ? '' : 's'}`, 'system');
+      if (state.open === p.id && state.detail) state.detail.notes.unshift(note);
+    } catch (e) { toast('Showing saved, but the activity note was not: ' + (e.message || 'error')); }
+    reread(p.id);
+  }
+  afterApptWrite(p.id);
+  if (a) { closeModal(); toast('Showing saved.'); return true; }
+  S.saved = row; shRender(); return true;
+}
+document.addEventListener('click', e => {
+  const t = e.target; let b;
+  if ((b = t.closest('[data-newshowing]'))) { openShowingForm(b.dataset.newshowing); return; }
+  if ((b = t.closest('[data-shedit]'))) { const a = findAppt(b.dataset.shedit); if (a && a.person_id) openShowingForm(a.person_id, a.id); return; }
+  if ((b = t.closest('[data-shshare]'))) { const a = shAppt(b.dataset.shshare); if (a && navigator.share) Promise.resolve().then(() => navigator.share({ text: itineraryText(a) })).catch(() => { /* the person closed the share sheet */ }); return; }
+  if ((b = t.closest('[data-shcopy]'))) {
+    const a = shAppt(b.dataset.shcopy); if (!a) return;
+    Promise.resolve().then(() => navigator.clipboard.writeText(itineraryText(a))).then(() => toast('Copied.'), () => toast('Could not copy. Select the text and copy it by hand.'));
+  }
 });
 
 // ───────── Renewals (Step 1: read-only; nothing here changes anything in Zillow) ─────────
@@ -4486,7 +4690,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '3.9';
+const APP_VERSION = '4.0';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
