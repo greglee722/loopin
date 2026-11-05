@@ -4318,8 +4318,11 @@ function smsHref(phone, body, ua = navigator.userAgent || '') {
   return 'sms:' + num + (/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(ua) ? '&' : '?') + 'body=' + encodeURIComponent(body);
 }
 const myPhone = () => { const m = state.me ? state.teamMap.get(state.me.id) : null; return m && m.phone ? String(m.phone).trim() : ''; };
+// v4.4 (Greg 2026-11-05): Copy only for now. Text me this and Share stay in the code behind SH_TEXT_ON for a later Twilio text to the agent.
+let SH_TEXT_ON = false;   // let, so the harness can test the hidden buttons
 function shareBtns(a) {
   const txt = itineraryText(a), ph = myPhone(), id = esc(a.id);
+  if (!SH_TEXT_ON) return `<button class="btn small" data-shcopy="${id}">Copy</button>`;
   return `${navigator.share ? `<button class="btn small" data-shshare="${id}">Share</button>` : ''}<a class="btn small" data-shsms="${id}" href="${esc(smsHref(ph, txt))}">Text me this</a><button class="btn small" data-shcopy="${id}">Copy</button>`
     + (ph ? '' : '<span class="sub" data-shnophone>Add your phone in Settings → Team to text it to yourself.</span>');
 }
@@ -4694,7 +4697,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.3';
+const APP_VERSION = '4.4';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
