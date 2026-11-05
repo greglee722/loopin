@@ -3820,7 +3820,7 @@ function gapCardHtml() {
     + `<div class="gaplists">${list('gapNeed', 'Needs inventory', need)}${list('gapRoom', 'Room for more ads', room)}</div>`
     + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="gapTbl"><thead><tr><th>Area</th>${GAP_COLS.map(c => `<th class="num">${GAP_HEAD[c]}</th>`).join('')}</tr></thead><tbody>${areas.map(a =>
       `<tr data-garea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${GAP_COLS.map(c => td(m.get(a)[c])).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="empty-s">No leads or listings.</div>')
-    + `<p class="sub bdfoot" id="gapLegend"><span class="pill bad">No inventory</span> leads, no listings · <span class="pill warn">Tight</span> more than ${esc(th)} leads per listing · <span class="pill ok">Room for ads</span> ${GAP_ROOM}+ listings and fewer leads than listings · <span class="pill">Covered</span> anything else</p>`
+    + `<p class="sub bdfoot" id="gapLegend"><span class="pill bad">No inventory</span> leads, no listings · <span class="pill warn">Tight</span> more than ${esc(th)} leads per listing · <span class="pill ok">Room for ads</span> ${GAP_ROOM}+ listings and fewer leads than listings · <span class="pill">Covered</span> enough listings for the leads, no action needed</p>`
     + `<p class="sub bdfoot" id="gapUnknown">${esc(plural(unknown, 'lead', 'leads'))} with unknown bedrooms ${unknown === 1 ? 'is' : 'are'} not in this table.</p></section>`;
 }
 // v3.5: one table for the area and the bedroom count. Rows are areas (most leads first), columns are bedroom buckets, plus Unknown and Total.
@@ -4697,7 +4697,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.4';
+const APP_VERSION = '4.5';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
