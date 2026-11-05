@@ -3380,8 +3380,9 @@ const fmtMonthDay = (d) => d.toLocaleDateString('en-US', d.getFullYear() === new
 const apptTitle = (a) => { const t = String(a.title == null ? '' : a.title), i = a.calendly ? t.toLowerCase().lastIndexOf(' and ') : -1; return i > 0 ? t.slice(0, i) : t; };
 // Other active team members on the showing's lead (the lead's owner, then its collaborators), host excluded. A coordinator's showing shows the agent too.
 // Managers never count: a manager reassigns a lead instead of collaborating on it (Greg 2026-10-29).
+// v4.3 (Greg 2026-11-04): only the lead's collaborators count, not its owner. Before, a showing booked by another agent on someone else's lead showed both icons.
 const apptOthers = (a, p, collab = state.apptCollab) => {
-  const ids = [p && p.owner_id, ...(a.person_id ? collab.get(a.person_id) || [] : [])];
+  const ids = a.person_id ? collab.get(a.person_id) || [] : [];
   return [...new Set(ids.filter(id => id && id !== a.member_id))].filter(id => { const m = state.teamMap.get(id); return m && m.active && m.role !== 'manager'; });
 };
 // v2.2 same-day double bookings: one renter + agent + local day shows as ONE row / counts ONCE. Both Google events stay in the data.
@@ -4572,7 +4573,7 @@ let confirmStaggerMs = CONFIRM_STAGGER_MS, confirmWaitMs = CONFIRM_WAIT_MS;   //
 const BLOCKED_MSG = 'Your browser blocked the pop-ups. Click the pop-up icon at the right of the address bar, choose Always allow pop-ups from greglee722.github.io, then click Confirm selected again.';
 const CAP_MSG = "You can confirm up to 10 at a time. Opening more makes Zillow ask if you're human. Confirm these 10, then select the next ones.";
 const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
-const cfWaitText = (B) => `Waiting for Zillow… closing tabs in ${Math.max(1, Math.ceil((B.waitUntil - Date.now()) / 1000))}s`;
+const cfWaitText = (B) => `Waiting for Zillow to confirm… ${Math.max(1, Math.ceil((B.waitUntil - Date.now()) / 1000))}s`;   // v4.3: Chrome does not let LoopIn close the Zillow tabs, so no "closing tabs"
 const confirmable = (l) => l && l.status === 'expiring' && !l.dismissed_at && state.renew.cOn && !state.renew.cErr && state.renew.confirm.has(Number(l.id));
 const bySoonest = (a, b) => String(a.expires_on || '9999').localeCompare(String(b.expires_on || '9999')) || String(a.listing_address || '').localeCompare(String(b.listing_address || ''));
 function confirmSelectedClick() {
@@ -4693,7 +4694,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.2';
+const APP_VERSION = '4.3';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
