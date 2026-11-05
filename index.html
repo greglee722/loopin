@@ -504,6 +504,7 @@ tr.unread .name { font-weight: 700; }
 .tile .k { font-size: 12.5px; color: var(--ink-3); font-weight: 600; }
 .tile .v { font-size: 30px; font-weight: 700; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
 .tile .s { font-size: 12.5px; color: var(--ink-3); }
+.tile .tn, .card .cnote { display: block; font-size: 12px; color: var(--ink-3); font-style: italic; margin-top: 2px; }   /* v4.8: what a tile or card counts */
 .tile.alert .v { color: var(--accent); } .tile.warn .v { color: var(--warn); }
 .dash { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .colstack { display: grid; gap: 16px; min-width: 0; }
@@ -3516,9 +3517,10 @@ function renderDash() {
     : state.loading ? `<span class="sub loadline" id="dashLoad">${state.total != null ? `Counting… ${all.length.toLocaleString('en-US')} of ${state.total.toLocaleString('en-US')} loaded` : 'Counting…'}</span>` : '';
   const head = `<div class="dash-head"><h1>${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'}, ${esc(state.me.full_name.split(' ')[0])}</h1><span class="sub">${esc(new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }))}</span>${loadLine}</div>`;
   const diff = newWeek - lastWeek;
-  const tile = (k, v, sub, go, cls = '') => go
-    ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></button>`
-    : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
+  // v4.8 note: one plain line that says what the tile counts (Greg 2026-11-05).
+  const tile = (k, v, sub, go, cls = '', note = '') => { const tn = note ? `<span class="tn">${note}</span>` : ''; return go
+    ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span>${tn}</button>`
+    : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span>${tn}</div>`; };
   const showT = (() => {
     const f = +dayStart(-6), t = +dayStart(1), e = state.rc.get(f + '|' + t);
     if (state.tileErr) return { v: '—', s: 'could not load' };
@@ -3531,10 +3533,10 @@ function renderDash() {
   const tiles = `<div class="tiles ${nTiles === 6 ? 'six' : 'five'}">
     ${tile('New leads today', newToday.toLocaleString('en-US'), `${newWeek.toLocaleString('en-US')} this week · ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toLocaleString('en-US')} vs last week`, 'new')}
     ${tile('Leads not contacted', waiting.length.toLocaleString('en-US'), 'last 30 days', 'unc', waiting.length ? 'alert' : '')}
-    ${tile('Showings today', showWait ? '…' : showToday.length, state.apptErr ? 'could not load' : showWait ? 'counting…' : nextShow ? `next up ${fmtTime(nextShow.ts.find(t => t >= Date.now()))}` : 'none left today', '')}
+    ${tile('Showings today', showWait ? '…' : showToday.length, state.apptErr ? 'could not load' : showWait ? 'counting…' : nextShow ? `next up ${fmtTime(nextShow.ts.find(t => t >= Date.now()))}` : 'none left today', '', '', 'Options Picked leads only')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
     ${renewTile ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
-    ${tile('Showings, last 7 days', showT.v, showT.s, 'show')}
+    ${tile('Showings, last 7 days', showT.v, showT.s, 'show', '', 'All booked showings, any stage')}
   </div>`;
 
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
@@ -3543,7 +3545,7 @@ function renderDash() {
   const apptWho = (a, others) => [who(a.member_id), ...others.map(who)].join(' + ');
 
   // Today's schedule
-  const schedule = `<section class="card"><h2>Today's schedule</h2>
+  const schedule = `<section class="card"><h2>Today's schedule</h2><p class="cnote" id="schedNote">Everything booked on the team's calendars today, at any stage. A green stage counts in Showings today.</p>
     ${state.apptErr ? `<div class="empty-s">Could not load showings: ${esc(state.apptErr)}</div>` : (() => {
       const rowsT = todayG.map((g) => { const p = g.a.person_id ? byId.get(g.a.person_id) : null; return { a: g.a, t: g.t, g, p, others: apptOthers(g.a, p) }; });
       const slot = 24 + (Math.min(3, 1 + Math.max(0, ...rowsT.map(r => r.others.length))) - 1) * 16;   // one fixed width per list keeps the title column aligned
@@ -4748,7 +4750,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.7';
+const APP_VERSION = '4.8';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
