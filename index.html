@@ -3556,8 +3556,8 @@ function renderDash() {
       }).join('');
     })() || '<div class="empty-s">No showings today.</div>'}</section>`;
 
-  // Booked with 2 agents (v4.6, managers only): one row per renter group, then each booking.
-  const cfCard = isMgr() && state.bc.loaded ? `<section class="card" id="dash-conflicts"><h2>Booked with 2 agents${state.bc.byGroup.size ? ` <span class="pill warn">${state.bc.byGroup.size}</span>` : ''}</h2>
+  // Booked with multiple agents (v4.6; title v4.7, Greg 2026-11-05; managers only): one row per renter group, then each booking.
+  const cfCard = isMgr() && state.bc.loaded ? `<section class="card" id="dash-conflicts"><h2>Booked with multiple agents${state.bc.byGroup.size ? ` <span class="pill warn">${state.bc.byGroup.size}</span>` : ''}</h2>
     ${[...state.bc.byGroup.entries()].map(([id, g]) => [id, g.slice().sort((x, y) => Date.parse(x.starts_at) - Date.parse(y.starts_at))]).sort((x, y) => Date.parse(x[1][0].starts_at) - Date.parse(y[1][0].starts_at) || (x[0] < y[0] ? -1 : 1)).map(([id, g]) => {
       const p = g.map(r => r.person_id && byId.get(r.person_id)).find(Boolean);
       return `<div class="li" data-cgroup="${esc(id)}"><div class="grow"><div class="name">${p ? plink(p) : 'Renter with no lead'}</div><div class="sub">${g.map(r => `${esc(firstName(r.member_id) || 'Team member')} · ${esc(fmtDT(Date.parse(r.starts_at)))}`).join('<br>')}</div></div></div>`;
@@ -4748,7 +4748,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.6';
+const APP_VERSION = '4.7';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
