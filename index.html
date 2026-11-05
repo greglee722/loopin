@@ -1105,6 +1105,8 @@ function makeApi(url, key) {
     // a must sort before b (the table has a check). The caller orders the pair; ignoreDuplicates makes a repeat harmless.
     async dismissDuplicate(a, b) { ok(await sb.from('duplicate_dismissals').upsert({ a, b }, { onConflict: 'a,b', ignoreDuplicates: true })); },
     async mergePeople(survivorId, mergedId) { return ok(await sb.rpc('pl_merge_people', { p_survivor: survivorId, p_merged: mergedId })); },
+    // v4.6 (supabase/25): bookings by one renter with 2+ agents who do not both work the lead. Managers see all, an agent sees only their own groups. The app treats any error as "none".
+    async bookingConflicts() { return ok(await sb.rpc('pl_booking_conflicts')); },
     async unmergePeople(logId) { return ok(await sb.rpc('pl_unmerge', { p_log: logId })); },
     // The merges into one lead that are not undone. note_id is the "Merged with" note, so the timeline can offer Undo on it.
     async mergeLogs(survivorId) {
@@ -1189,6 +1191,7 @@ const mailSvg = '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="tr
 const initials = (s) => (String(s || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => Array.from(w)[0]).join('') || '?').toUpperCase();
 
 // ───────── State ─────────
+function bcNone() { return { loaded: false, at: 0, busy: false, sig: '', byAppt: new Map(), byGroup: new Map(), byPerson: new Map() }; }   // v4.6: Booked with 2 agents
 const state = {
   userId: null, user: null, me: null,
   team: [], teamMap: new Map(), colors: new Map(),
@@ -1206,6 +1209,7 @@ const state = {
   view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
   rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(),
   cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
+  bc: bcNone(),   // v4.6: the booking conflicts (managers only)
   dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null,   // v2.3: the duplicates filter, feature on/off, change counter, dismissed pairs, the open merge
 };
 const inqCache = new Map();   // person id -> newest listing address, filled when a person is opened
@@ -1321,7 +1325,7 @@ function resetApp() {
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
     rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
-    dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
+    bc: bcNone(), dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
   BR = newBR(); inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
   $('#search').value = '';
   closeModal();
@@ -2545,7 +2549,7 @@ async function showPanel(id) {
   setTimeout(() => { $('#panel').classList.remove('settle'); $('#scrim').classList.remove('settle'); }, 450);
   renderPanel();
   if (!byId.has(id) && !state.loading) ensureOpenRow(id);
-  loadLeadAppts(id);
+  loadLeadAppts(id); loadConflicts(false);   // v4.6
   try {
     const d = await api.person(id);
     d.merges = isMgr() && state.dupOn ? await api.mergeLogs(id).catch(() => []) : [];
@@ -2671,7 +2675,7 @@ function renderPanel() {
       ${agentLine}
       ${reassignSoon}
     </div>
-    <div class="panel-body">${roBanner}${dupBanner(p)}${contact}${details}
+    <div class="panel-body">${roBanner}${dupBanner(p)}${conflictBanner(p)}${contact}${details}
       <div class="section"><h4>Inquiries</h4>${inq}</div>
       <div class="section" id="optionsSec"><h4>Options</h4>${d ? optionsHtml(p, d) : loadOrErr}</div>
       <div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p)}</div>
@@ -2715,7 +2719,7 @@ function renderPanel() {
     const av = `<div class="avatar lg" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
     el.innerHTML = `<div class="lpwrap"><div class="lp">
       <aside class="lp-col" id="lpLeft" aria-label="Person"><div class="section idcard"><div class="idtop">${av}<div style="min-width:0">${titleHtml}</div></div>${contactedRow}${agentLine}${reassignSoon}</div>${contact}${details}</aside>
-      <section class="lp-col" id="lpMid" aria-label="Activity">${roBanner}${dupBanner(p)}${composer}${feed}</section>
+      <section class="lp-col" id="lpMid" aria-label="Activity">${roBanner}${dupBanner(p)}${conflictBanner(p)}${composer}${feed}</section>
       <aside class="lp-col" id="lpRight" aria-label="This lead">${navCard}<div class="section"><h4>Inquiries</h4>${inq}</div><div class="section" id="showingsSec"><h4>Showings</h4>${showingsHtml(p, true)}</div><div class="section" id="collabSec"><h4>Collaborators</h4>${collab}</div></aside>
     </div></div>`;
   }
@@ -3406,10 +3410,50 @@ function groupBook(items) {
 const bookedTxt = (n) => n < 2 ? '' : n === 2 ? 'Booked twice' : `Booked ${n} times`;
 const timesTxt = (ts) => ts.map(fmtTime).join(', ');
 
+// v4.6 (supabase/25): Booked with 2 agents. Managers only. One renter booked Calendly showings with 2+ agents who do not both work the lead.
+// pl_booking_conflicts() gives one row per such booking: { group_id, appt_id, member_id, person_id, starts_at }. If the function is missing
+// (SQL 25 not run) or the call fails, the answer is "no conflicts" and nothing shows. A lead's banner lists the group's bookings that the lead's owner does not host.
+async function loadConflicts(force) {
+  const cur = state.bc;
+  if (!isMgr() || cur.busy || (!force && cur.loaded && Date.now() - cur.at < 300000)) return;
+  const gen = loadGen; cur.busy = true;
+  let rows = [];
+  try { rows = (await api.bookingConflicts()) || []; } catch (_) { rows = []; }
+  if (gen !== loadGen) return;
+  const bc = bcNone(), sig = JSON.stringify(rows);
+  for (const r of rows) { if (!bc.byGroup.has(r.group_id)) bc.byGroup.set(r.group_id, []); bc.byGroup.get(r.group_id).push(r); }
+  for (const g of bc.byGroup.values()) for (const r of g) {
+    bc.byAppt.set(r.appt_id, g.filter(x => x.member_id !== r.member_id));
+    if (r.person_id) { if (!bc.byPerson.has(r.person_id)) bc.byPerson.set(r.person_id, []); if (!bc.byPerson.get(r.person_id).includes(g)) bc.byPerson.get(r.person_id).push(g); }
+  }
+  bc.loaded = true; bc.at = Date.now(); bc.sig = sig;
+  const changed = !cur.loaded || cur.sig !== sig;
+  state.bc = bc;
+  if (!changed) return;
+  if (state.view === 'dash' && !state.apptBusy) renderDash();   // while loadAppts runs, it draws the Dashboard when it ends
+  if (state.view === 'calendar') renderCal();
+  if (state.open) renderPanel();
+}
+// The other bookings of this lead's groups that its owner does not host, oldest first.
+function bcLead(p) {
+  const gs = isMgr() && p ? state.bc.byPerson.get(p.id) : null, out = new Map();
+  for (const g of gs || []) for (const r of g) if (r.member_id !== p.owner_id) out.set(r.appt_id, r);
+  return [...out.values()].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || (a.appt_id < b.appt_id ? -1 : 1));
+}
+// First names of the other agents booked with the same renter as this showing.
+const bcNames = (a) => isMgr() ? [...new Set((state.bc.byAppt.get(a.id) || []).map(r => firstName(r.member_id) || 'Team member'))].join(', ') : '';
+const bcTag = (a) => { const n = bcNames(a); return n ? `<span class="pill warn" data-conflict>Also booked with ${esc(n)}</span>` : ''; };
+function conflictBanner(p) {
+  const o = bcLead(p);
+  if (!o.length) return '';
+  return `<div class="dupe" id="conflictBanner">${o.map(r => `<div>Also booked with <b>${esc(firstName(r.member_id) || 'Team member')}</b> · ${esc(fmtDT(Date.parse(r.starts_at)))}.</div>`).join('')}<div class="sub">Whoever confirmed the time first keeps the lead.</div></div>`;
+}
+
 // Appointments for [start of today, start of today + 8 days) in local time. Reloaded when the Dashboard opens and the data is over 5 minutes old.
 async function loadAppts() {
   if (state.apptBusy || !state.me) return;
   const gen = loadGen; state.apptBusy = true;
+  if (isMgr()) loadConflicts(true);   // v4.6
   try {
     const rows = await api.appointments(dayStart(0).toISOString(), dayStart(8).toISOString());
     if (gen !== loadGen) return;
@@ -3512,6 +3556,13 @@ function renderDash() {
       }).join('');
     })() || '<div class="empty-s">No showings today.</div>'}</section>`;
 
+  // Booked with 2 agents (v4.6, managers only): one row per renter group, then each booking.
+  const cfCard = isMgr() && state.bc.loaded ? `<section class="card" id="dash-conflicts"><h2>Booked with 2 agents${state.bc.byGroup.size ? ` <span class="pill warn">${state.bc.byGroup.size}</span>` : ''}</h2>
+    ${[...state.bc.byGroup.entries()].map(([id, g]) => [id, g.slice().sort((x, y) => Date.parse(x.starts_at) - Date.parse(y.starts_at))]).sort((x, y) => Date.parse(x[1][0].starts_at) - Date.parse(y[1][0].starts_at) || (x[0] < y[0] ? -1 : 1)).map(([id, g]) => {
+      const p = g.map(r => r.person_id && byId.get(r.person_id)).find(Boolean);
+      return `<div class="li" data-cgroup="${esc(id)}"><div class="grow"><div class="name">${p ? plink(p) : 'Renter with no lead'}</div><div class="sub">${g.map(r => `${esc(firstName(r.member_id) || 'Team member')} · ${esc(fmtDT(Date.parse(r.starts_at)))}`).join('<br>')}</div></div></div>`;
+    }).join('') || '<div class="empty-s">None right now.</div>'}</section>` : '';
+
   // Team Hit Lists (read-only): only agents who use LoopIn
   const todayKey = localKey(Date.now());
   const groups = state.team.filter(m => m.role === 'agent' && m.can_sign_in === true);
@@ -3585,7 +3636,7 @@ function renderDash() {
   const look = `<section class="card" id="dash-look"><h2>Needs a look</h2>
     ${due.map(({ p, d, days }) => `<div class="li"><span class="dot off" aria-hidden="true"></span>${av(p)}<div class="grow"><div class="name">${plink(p)}</div><div class="sub">Moves in ${esc(fmtMonthDay(d))}, ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}. Reach back out.</div></div><span class="sub">${who(p.owner_id)}</span></div>`).join('') || '<div class="empty-s">All clear.</div>'}</section>`;
 
-  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>`;
+  $('#dash').innerHTML = head + tiles + `<div class="dash"><div class="colstack">${schedule}${cfCard}${hits}${byAgent}${newLeads}</div><div class="colstack">${comingUp}${sources}${zsec}${look}</div></div>`;
 }
 
 // ───────── Lead breakdown and area rules (v2.8, supabase/15) ─────────
@@ -4065,7 +4116,7 @@ function renderCal() {
   }).filter(Boolean).sort((x, y) => x.t - y.t || (x.a.id < y.a.id ? -1 : 1));
   const cnt = new Map(); evs.forEach(x => { const k = bookKey(x.a, x.t); if (k) cnt.set(k, (cnt.get(k) || 0) + 1); });
   const bk = (x) => { const k = bookKey(x.a, x.t); return k ? bookedTxt(cnt.get(k)) : ''; };
-  const tip = (x) => `${KINDS[kindOf(x.a)]} · ${memberName(x.a.member_id) || 'Team member'} · ${fmtTime(x.t)} · ${apptTitle(x.a)}${bk(x) ? ' · ' + bk(x) : ''}`;
+  const tip = (x) => `${KINDS[kindOf(x.a)]} · ${memberName(x.a.member_id) || 'Team member'} · ${fmtTime(x.t)} · ${apptTitle(x.a)}${bk(x) ? ' · ' + bk(x) : ''}${bcNames(x.a) ? ' · also booked with ' + bcNames(x.a) : ''}`;
   const grouped = (list) => groupBook(list.map(x => Object.assign({}, x)));   // one row per renter + agent + day
   if (c.view === 'month') {
     const MAX = 3; let html = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(dn => `<div class="mh">${dn}</div>`).join('');
@@ -4093,7 +4144,7 @@ function renderCal() {
   $('#calList').innerHTML = days.map(ms => {
     const g = grouped(evs.filter(x => x.day === localKey(ms)));
     if (!g.length) return c.view === 'day' ? '<div class="section"><div class="empty-s">No showings or events this day.</div></div>' : '';
-    return `<div class="section"><h4>${esc(fmt(ms, { weekday: 'short', month: 'short', day: 'numeric' }))}</h4>${g.map(x => `<button class="inq calrow k-${kindOf(x.a)}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}"><div class="row" style="justify-content:space-between"><b>${esc(timesTxt(x.ts))} · ${esc(KINDS[kindOf(x.a)])}</b>${agentChip(x.a, x.others)}</div><div>${esc(apptTitle(x.a))}${x.as.length > 1 ? ` <span class="bk">· ${esc(bookedTxt(x.as.length))}</span>` : ''}</div></button>`).join('')}</div>`;
+    return `<div class="section"><h4>${esc(fmt(ms, { weekday: 'short', month: 'short', day: 'numeric' }))}</h4>${g.map(x => `<button class="inq calrow k-${kindOf(x.a)}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}"><div class="row" style="justify-content:space-between"><b>${esc(timesTxt(x.ts))} · ${esc(KINDS[kindOf(x.a)])}</b>${agentChip(x.a, x.others)}</div><div>${esc(apptTitle(x.a))}${x.as.length > 1 ? ` <span class="bk">· ${esc(bookedTxt(x.as.length))}</span>` : ''} ${bcTag(x.a)}</div></button>`).join('')}</div>`;
   }).join('') || '<div class="section"><div class="empty-s">Nothing this week.</div></div>';
 }
 function renderReport() {
@@ -4261,7 +4312,7 @@ function showingRowHtml(a, links, now, inTimeline, compact, tabActs) {
       + (isShowing(a) && gone && mayCancel(a) ? `<button class="btn small" data-appteditreason="${esc(a.id)}">Edit reason</button>` : '')
       + (isShowing(a) && !gone && mayCancel(a) ? `<button class="btn small" data-shedit="${esc(a.id)}" aria-label="Edit stops and notes">Edit stops</button>` : '')   // v4.0
       + (isShowing(a) && !gone && (stopsOf(a).length || a.prep_note || loopinMade(a)) ? shareBtns(a) : '');
-    return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
+    return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${bcTag(a)}${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
       <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}${a.mode === 'virtual' ? ' · Virtual' : ''}</div>${stopsListHtml(a, compact)}
       ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
       ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && (!inTimeline || tabActs) ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
@@ -4697,7 +4748,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.5';
+const APP_VERSION = '4.6';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
