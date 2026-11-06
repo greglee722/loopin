@@ -1018,6 +1018,7 @@ function makeApi(url, key) {
     setZillow(on) { withZ = !!on; },
     // Bulk update one chunk (100 ids or fewer). Returns the updated rows.
     async bulkUpdate(ids, patch) {
+      if ('stage_id' in patch) state.opw.at = 0;   // v4.9: the Options Picked tile reloads
       return ok(await sb.from('people').update(patch).in('id', ids).select(cols()));
     },
     async updatePerson(id, patch) { return ok(await sb.from('people').update(patch).eq('id', id).select(cols()).single()); },
@@ -1071,6 +1072,7 @@ function makeApi(url, key) {
         .eq('id', id).select(cols()).single());
     },
     async setStage(id, stageId, extra) {
+      state.opw.at = 0;   // v4.9: the Options Picked tile reloads
       return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(cols()).single());
     },
     async addNote(personId, meId, body, kind = 'note') {   // v2.5: kind 'text_log' for Log text (the notes.kind check already allows it). v3.6: 'system' for an option status change (notes_insert has no kind rule)
@@ -1108,6 +1110,8 @@ function makeApi(url, key) {
     async mergePeople(survivorId, mergedId) { return ok(await sb.rpc('pl_merge_people', { p_survivor: survivorId, p_merged: mergedId })); },
     // v4.6 (supabase/25): bookings by one renter with 2+ agents who do not both work the lead. Managers see all, an agent sees only their own groups. The app treats any error as "none".
     async bookingConflicts() { return ok(await sb.rpc('pl_booking_conflicts')); },
+    // v4.9 (supabase/26): the leads in a stage at any time in [from, to). Rows { person_id, entered }. RLS limits an agent to their own leads.
+    async stageWeek(stageId, from, to) { return ok(await sb.rpc('pl_stage_week', { p_stage: stageId, p_from: from, p_to: to })); },
     async unmergePeople(logId) { return ok(await sb.rpc('pl_unmerge', { p_log: logId })); },
     // The merges into one lead that are not undone. note_id is the "Merged with" note, so the timeline can offer Undo on it.
     async mergeLogs(survivorId) {
@@ -1208,7 +1212,7 @@ const state = {
   set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
   view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
-  rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(),
+  rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, syncFrom: undefined, leadAppts: new Map(),
   cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
   bc: bcNone(),   // v4.6: the booking conflicts (managers only)
   dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null,   // v2.3: the duplicates filter, feature on/off, change counter, dismissed pairs, the open merge
@@ -1325,7 +1329,7 @@ function resetApp() {
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
-    rc: new Map(), tileErr: '', syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
+    rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
     bc: bcNone(), dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
   BR = newBR(); inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
   $('#search').value = '';
@@ -2000,7 +2004,7 @@ function renderList() {
   const rowsShown = list.slice(0, state.limit), defs = cols.slice(1).map(colDef);
   state.list = list; state.shownIds = rowsShown.map(p => p.id);
   $('#rows').innerHTML = rowsShown.map(p => rowHtml(p, defs)).join('');
-  $('#onlyChip').hidden = !state.onlyIds; if (state.onlyIds) $('#onlyText').textContent = `Showing the ${plural(state.onlyIds.size, 'person', 'people')} that were skipped.`;
+  $('#onlyChip').hidden = !state.onlyIds; if (state.onlyIds) $('#onlyText').textContent = `Showing the ${plural(state.onlyIds.size, 'person', 'people')} ${state.onlyLabel || 'that were skipped'}.`;
   $('#empty').hidden = n > 0 || state.loading || waitBR();
   $('#more').hidden = n <= state.limit;
   $('#moreBtn').textContent = n - state.limit > SHOW ? `Show ${SHOW} more` : `Show ${n - state.limit} more`;
@@ -2317,9 +2321,9 @@ async function continueBulk() {
   b.res = parts.join(' ');
   state.sel.clear(); toast(parts[0]); renderList(); renderBulk();
 }
-function showThese(ids) {
+function showThese(ids, label) {   // v4.9: label for the chip; none = the skipped leads of a bulk change
   state.q = ''; $('#search').value = ''; state.sl = 'all'; state.dup = false; state.filters = [];
-  state.sel.clear(); state.onlyIds = new Set(ids); state.limit = SHOW;
+  state.sel.clear(); state.onlyIds = new Set(ids); state.onlyLabel = label || ''; state.limit = SHOW;
   state.bulk = Object.assign({}, state.bulk, { res: '', incNames: [] });
   renderFilters(); renderList();
 }
@@ -3521,13 +3525,13 @@ function renderDash() {
   const tile = (k, v, sub, go, cls = '', note = '') => { const tn = note ? `<span class="tn">${note}</span>` : ''; return go
     ? `<button class="tile ${cls}" data-go="${go}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span>${tn}</button>`
     : `<div class="tile static ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${sub}</span>${tn}</div>`; };
-  const showT = (() => {
-    const f = +dayStart(-6), t = +dayStart(1), e = state.rc.get(f + '|' + t);
-    if (state.tileErr) return { v: '—', s: 'could not load' };
-    if (!e) return { v: '…', s: esc(rangeLabel(f, t, true)) };
-    const st = showingStats(e, f, t), per = [...st.per.entries()].filter(([, x]) => x.n > 0).sort((x, y) => y[1].n - x[1].n || memberName(x[0]).localeCompare(memberName(y[0])));
-    const early = state.syncFrom && Date.parse(state.syncFrom) > f ? ' · Data from ' + fmtMonthDay(new Date(state.syncFrom)) : '';
-    return { v: st.total.toLocaleString('en-US'), s: esc(rangeLabel(f, t, true) + early) + (per.length ? '<br>' + esc(per.map(([id, x]) => (firstName(id) || 'Team') + ' ' + x.n).join(' · ')) : '') };
+  // v4.9 (Greg 2026-11-06, Option A): Options Picked this week replaces "Showings, last 7 days". From pl_stage_week (supabase/26).
+  const opT = (() => {
+    const o = state.opw;
+    if (o.err) return { v: '—', s: 'could not load' };
+    if (!o.now) return { v: '…', s: 'counting…' };
+    const m = o.now.filter(r => r.entered).length;
+    return { v: o.now.length.toLocaleString('en-US'), s: `${m.toLocaleString('en-US')} new this week · last week ${o.last.length.toLocaleString('en-US')}` };
   })();
   const renewTile = state.rOn && state.me.role === 'manager', nTiles = 5 + (renewTile ? 1 : 0);
   const tiles = `<div class="tiles ${nTiles === 6 ? 'six' : 'five'}">
@@ -3536,7 +3540,7 @@ function renderDash() {
     ${tile('Showings today', showWait ? '…' : showToday.length, state.apptErr ? 'could not load' : showWait ? 'counting…' : nextShow ? `next up ${fmtTime(nextShow.ts.find(t => t >= Date.now()))}` : 'none left today', '', '', 'Options Picked leads only')}
     ${tile('Needs a look', due.length, 'move-in reminders', 'look', due.length ? 'warn' : '')}
     ${renewTile ? tile('Listings to renew', state.renew.loaded ? renewCount() : state.renew.err ? '—' : '…', state.renew.err ? 'could not load' : 'waiting for you to confirm in Zillow', 'renew', state.renew.loaded && renewCount() ? 'warn' : '') : ''}
-    ${tile('Showings, last 7 days', showT.v, showT.s, 'show', '', 'All booked showings, any stage')}
+    ${tile('Options Picked this week', opT.v, opT.s, 'opw', '', 'Leads in Options Picked at any time this week, Monday to Sunday')}
   </div>`;
 
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
@@ -3947,7 +3951,7 @@ $('#dash').addEventListener('click', e => {
   if (g) {
     const k = g.dataset.go;
     if (k === 'renew') { go('renewals'); return; }
-    if (k === 'show') { Object.assign(state.cal, { preset: '7d', from: '', to: '' }); go('calendar'); return; }
+    if (k === 'opw') { if (!state.opw.now) return; go('people'); showThese(state.opw.now.map(r => r.person_id), 'in Options Picked this week'); return; }   // v4.9
     if (k === 'look') { const el = $('#dash-look'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     else peopleWith({ unc: k === 'unc' });
     return;
@@ -4033,11 +4037,19 @@ async function loadSyncFrom() {
   catch (_) { if (gen !== loadGen) return; if (state.syncFrom === undefined) state.syncFrom = null; }
   if (state.view === 'dash') renderDash(); else if (state.view === 'calendar') renderCal();
 }
+// v4.9: the Options Picked tile. This week and last week (Monday to Sunday, local time), from pl_stage_week. Reloads after 5 minutes,
+// when the week changes, or after a stage change in LoopIn (setStage and bulkUpdate set opw.at = 0).
 async function loadTile() {
   if (!state.me) return;
-  const gen = loadGen, f = +dayStart(-6), t = +dayStart(1), e = state.rc.get(f + '|' + t);
-  if (e && Date.now() - e.at < 300000) return;
-  try { await getRange(f, t); if (gen === loadGen) state.tileErr = ''; } catch (err) { if (gen !== loadGen) return; state.tileErr = err.message || 'error'; }
+  const gen = loadGen, w0 = weekStartMs(Date.now()), o = state.opw;
+  if (o.at && o.w0 === w0 && Date.now() - o.at < 300000) return;
+  const st = state.stages.find(s => /^options picked/i.test(s.name)), iso = (ms) => new Date(ms).toISOString();
+  try {
+    if (!st) throw new Error('no Options Picked stage');
+    const [now, last] = await Promise.all([api.stageWeek(st.id, iso(w0), iso(addDays(w0, 7))), api.stageWeek(st.id, iso(addDays(w0, -7)), iso(w0))]);
+    if (gen !== loadGen) return;
+    state.opw = { at: Date.now(), w0, err: '', now: now || [], last: last || [] };
+  } catch (err) { if (gen !== loadGen) return; state.opw = { at: Date.now(), w0, err: err.message || 'error', now: null, last: null }; }
   if (gen === loadGen && state.view === 'dash') renderDash();
 }
 
@@ -4750,7 +4762,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.8';
+const APP_VERSION = '4.9';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
