@@ -951,7 +951,7 @@ function makeApi(url, key) {
       return ok(await sb.from('team_members').select('id,full_name,role,photo_url,can_export,theme,people_columns')
         .eq('auth_user_id', userId).eq('active', true).eq('can_sign_in', true).maybeSingle());
     },
-    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on')); },
+    async team() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,photo_url,reminder_days,hit_reviewed_on,books_only')); },
     async stages() {
       return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable').eq('active', true).order('sort_order'));
     },
@@ -1040,7 +1040,7 @@ function makeApi(url, key) {
     // Settings (managers; row-level security allows these writes only for a manager)
     async allStages() { return ok(await sb.from('stages').select('id,name,sort_order,closes_lead,is_nonworkable,active').order('sort_order')); },
     async allFields() { return ok(await sb.from('custom_field_defs').select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').order('sort_order')); },
-    async allTeam() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme,photo_url,reminder_days,hit_reviewed_on')); },
+    async allTeam() { return ok(await sb.from('team_members').select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme,photo_url,reminder_days,hit_reviewed_on,books_only')); },
     async updateStage(id, patch) { return ok(await sb.from('stages').update(patch).eq('id', id).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
     async addStage(row) { return ok(await sb.from('stages').insert(row).select('id,name,sort_order,closes_lead,is_nonworkable,active').single()); },
     async updateField(key, patch) { return ok(await sb.from('custom_field_defs').update(patch).eq('key', key).select('key,label,type,options,sort_order,required_for_nonworkable,hidden,active').single()); },
@@ -1048,7 +1048,7 @@ function makeApi(url, key) {
     async addTagName(name) { return ok(await sb.from('tags').insert({ name }).select('name').single()); },
     async deleteTag(name) { gone(await sb.from('tags').delete().eq('name', name).select('name')); },
     async setAgentsTags(on) { return ok(await sb.from('team_settings').update({ agents_create_tags: !!on }).eq('id', 1).select('agents_create_tags').single()); },
-    async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme').single()); },
+    async updateMember(id, patch) { return ok(await sb.from('team_members').update(patch).eq('id', id).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme,books_only').single()); },
     async addMember(row) { return ok(await sb.from('team_members').insert(row).select('id,full_name,role,active,can_sign_in,can_export,email,lead_gmail,phone,contact_email,theme').single()); },
     // Email templates (v1.8). Page past the 1000-row cap.
     async templates() {
@@ -3390,9 +3390,19 @@ const apptTitle = (a) => { const t = String(a.title == null ? '' : a.title), i =
 // Other active team members on the showing's lead (the lead's owner, then its collaborators), host excluded. A coordinator's showing shows the agent too.
 // Managers never count: a manager reassigns a lead instead of collaborating on it (Greg 2026-10-29).
 // v4.3 (Greg 2026-11-04): only the lead's collaborators count, not its owner. Before, a showing booked by another agent on someone else's lead showed both icons.
+// v5.0 (Greg 2026-11-11): a booker (team_members.books_only, e.g. Yuli) hosts the Calendly event but never shows it. The shower is the lead's owner
+// (null = Unassigned when there is no lead or its owner is also a booker). A non-booker host is the shower. Display and counts only: edit/cancel rights stay on member_id.
+const showerOf = (a) => {
+  const h = state.teamMap.get(a.member_id);
+  if (!h || !h.books_only) return a.member_id;
+  const o = a.person_id ? (byId.get(a.person_id) || {}).owner_id : null, m = o ? state.teamMap.get(o) : null;
+  return o && !(m && m.books_only) ? o : null;
+};
+const showerName = (a) => { const id = showerOf(a); return id ? memberName(id) || 'Team member' : 'Unassigned'; };   // v5.0
 const apptOthers = (a, p, collab = state.apptCollab) => {
   const ids = a.person_id ? collab.get(a.person_id) || [] : [];
-  return [...new Set(ids.filter(id => id && id !== a.member_id))].filter(id => { const m = state.teamMap.get(id); return m && m.active && m.role !== 'manager'; });
+  const sh = showerOf(a);   // v5.0: the shower, not the booker host
+  return [...new Set(ids.filter(id => id && id !== sh))].filter(id => { const m = state.teamMap.get(id); return m && m.active && m.role !== 'manager'; });
 };
 // v2.2 same-day double bookings: one renter + agent + local day shows as ONE row / counts ONCE. Both Google events stay in the data.
 const isShowing = (a) => a.kind === 'showing' || a.kind === 'reshow';
@@ -3513,7 +3523,7 @@ function renderDash() {
   const inShowStage = (a) => { if (loopinMade(a)) return true; const p = a.person_id ? byId.get(a.person_id) : null; return !!(p && showStage && p.stage_id === showStage.id); };
   const showToday = groupBook(today.filter(x => isShowing(x.a) && x.a.fub_id == null && inShowStage(x.a)));
   const nextShow = showToday.find(g => g.ts.some(t => t >= Date.now())), showWait = state.loading || state.loadFailed;   // a lead not loaded yet would count as 0
-  const apptsOf = (id) => showWait ? '…' : showToday.filter(g => g.a.member_id === id).length;
+  const apptsOf = (id) => showWait ? '…' : showToday.filter(g => showerOf(g.a) === id).length;
 
   const h = new Date().getHours();
   const loadLine = state.loadFailed
@@ -3546,7 +3556,7 @@ function renderDash() {
   const av = (p) => `<div class="avatar sm" style="background:${state.colors.get(p.owner_id) || GREY}">${esc(initials(p._name))}</div>`;
   const plink = (p, label) => `<a href="#p/${esc(p.id)}" class="lnk" data-openlead="${esc(p.id)}">${esc(label || p._name || '(no name)')}</a>`;
   const who = (id) => id ? esc(memberName(id) || 'Team member') : 'Unassigned';
-  const apptWho = (a, others) => [who(a.member_id), ...others.map(who)].join(' + ');
+  const apptWho = (a, others) => [who(showerOf(a)), ...others.map(who)].join(' + ');
 
   // Today's schedule
   const schedule = `<section class="card"><h2>Today's schedule</h2><p class="cnote" id="schedNote">Everything booked on the team's calendars today, at any stage. A green stage counts in Showings today.</p>
@@ -3558,7 +3568,7 @@ function renderDash() {
       // The lead's stage (Greg 2026-11-02): green = Options Picked (counted in Showings today), amber = any other stage.
       const st = p && stageOf(p);
       const stg = st ? `<span class="pill ${showStage && st.id === showStage.id ? 'ok' : 'warn'}">${esc(st.name)}</span>` : !a.person_id ? '<span class="sub">No lead linked</span>' : '';
-      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div>${stg}</div>`;
+      return `<div class="li"><span class="time">${esc(fmtTime(t))}</span><span class="avstack" style="width:${slot}px">${[showerOf(a), ...others].slice(0, 3).map(id => avatar(id, 'sm')).join('')}</span><div class="grow"><div class="name">${p ? plink(p, title) : esc(title)}${n > 1 ? esc(' · ' + timesTxt(g.ts)) : ''}</div><div class="sub">${apptWho(a, others)}${n > 1 ? ' · ' + bookedTxt(n) : ''}${nextG === g ? ' · next up' : g.ts[n - 1] < Date.now() ? ' · done' : ''}</div></div>${stg}</div>`;
       }).join('');
     })() || '<div class="empty-s">No showings today.</div>'}</section>`;
 
@@ -4053,16 +4063,16 @@ async function loadTile() {
   if (gen === loadGen && state.view === 'dash') renderDash();
 }
 
-// The showings report. A showing counts for the host (member_id). One renter + agent + day counts once.
+// The showings report. A showing counts for the shower (v5.0: the host, or the lead's owner when the host is a booker; else Unassigned). One renter + agent + day counts once.
 function showingStats(e, f, t) {
   const per = new Map(), seen = new Set(); let total = 0;
-  const slot = (id) => { if (!per.has(id)) per.set(id, { n: 0, c: 0, with: new Map() }); return per.get(id); };
+  const slot = (id) => { if (!per.has(id)) per.set(id, { n: 0, c: 0, with: new Map() }); return per.get(id); };   // v5.0: id null = Unassigned
   for (const a of e.rows) {
     const ts = Date.parse(a.starts_at);
     if (!isShowing(a) || a.fub_id != null || isNaN(ts) || ts < f || ts >= t) continue;
-    if (!isActive(a)) { slot(a.member_id).c++; continue; }
+    if (!isActive(a)) { slot(showerOf(a)).c++; continue; }
     const k = bookKey(a, ts); if (k) { if (seen.has(k)) continue; seen.add(k); }
-    const s = slot(a.member_id); s.n++; total++;
+    const s = slot(showerOf(a)); s.n++; total++;
     for (const o of apptOthers(a, a.person_id ? byId.get(a.person_id) : null, e.collab)) s.with.set(o, (s.with.get(o) || 0) + 1);
   }
   return { per, total };
@@ -4094,7 +4104,7 @@ async function loadCal() {
 }
 
 const fmtHour = (h) => { const hh = Math.floor(h), mm = h % 1 ? '30' : '00'; return `${((hh + 11) % 12) + 1}:${mm} ${hh < 12 ? 'AM' : 'PM'}`; };
-const agentChip = (a, others) => `<span class="evt-who">${[a.member_id, ...others].slice(0, 3).map(id => avatar(id, 'xs')).join('')}<span class="nm">${esc(firstName(a.member_id) || 'Team')}</span></span>`;
+const agentChip = (a, others) => { const sh = showerOf(a); return `<span class="evt-who">${[sh, ...others].slice(0, 3).map(id => avatar(id, 'xs')).join('')}<span class="nm">${esc(sh ? firstName(sh) || 'Team' : 'Unassigned')}</span></span>`; };   // v5.0
 // Events that overlap share the width of the day: each gets a lane, and a group of overlaps splits into equal lanes.
 function lanes(evs) {
   const out = []; let group = [], end = -1;
@@ -4124,13 +4134,13 @@ function renderCal() {
   $('#calMsg').innerHTML = c.err ? `<div class="empty-s err">Could not load the calendar: ${esc(c.err)} <button class="btn small" data-calretry>Try again</button></div>` : !e ? loader() : '';
   renderReport();
   if (!e) { $('#cal').innerHTML = $('#calList').innerHTML = $('#calMonth').innerHTML = ''; return; }
-  const evs = e.rows.filter(a => isActive(a) && (mgr ? !c.agent || a.member_id === c.agent : a.member_id === state.me.id)).map(a => {
+  const evs = e.rows.filter(a => isActive(a) && (mgr ? !c.agent || showerOf(a) === c.agent : showerOf(a) === state.me.id || a.member_id === state.me.id)).map(a => {
     const t = Date.parse(a.starts_at), dd = new Date(t), start = dd.getHours() + dd.getMinutes() / 60, en = Date.parse(a.ends_at);
     return isNaN(t) ? null : { a, t, day: localKey(t), start, len: Math.max(.25, Math.min(isNaN(en) ? 1 : (en - t) / 36e5, 24 - start)), others: apptOthers(a, a.person_id ? byId.get(a.person_id) : null, e.collab) };
   }).filter(Boolean).sort((x, y) => x.t - y.t || (x.a.id < y.a.id ? -1 : 1));
   const cnt = new Map(); evs.forEach(x => { const k = bookKey(x.a, x.t); if (k) cnt.set(k, (cnt.get(k) || 0) + 1); });
   const bk = (x) => { const k = bookKey(x.a, x.t); return k ? bookedTxt(cnt.get(k)) : ''; };
-  const tip = (x) => `${KINDS[kindOf(x.a)]} · ${memberName(x.a.member_id) || 'Team member'} · ${fmtTime(x.t)} · ${apptTitle(x.a)}${bk(x) ? ' · ' + bk(x) : ''}${bcNames(x.a) ? ' · also booked with ' + bcNames(x.a) : ''}`;
+  const tip = (x) => `${KINDS[kindOf(x.a)]} · ${showerName(x.a)} · ${fmtTime(x.t)} · ${apptTitle(x.a)}${bk(x) ? ' · ' + bk(x) : ''}${bcNames(x.a) ? ' · also booked with ' + bcNames(x.a) : ''}`;
   const grouped = (list) => groupBook(list.map(x => Object.assign({}, x)));   // one row per renter + agent + day
   if (c.view === 'month') {
     const MAX = 3; let html = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(dn => `<div class="mh">${dn}</div>`).join('');
@@ -4138,7 +4148,7 @@ function renderCal() {
     for (let ms = r.f; ms < r.t; ms = addDays(ms, 1)) {
       const k = localKey(ms), day = grouped(evs.filter(x => x.day === k));
       html += `<div class="mcell ${ms < r.first || ms > r.last ? 'out' : ''} ${k === todayK ? 'today' : ''}"><button class="mdate" data-calday="${k}" title="Open ${esc(fmt(ms, { weekday: 'long', month: 'long', day: 'numeric' }))}">${new Date(ms).getDate()}</button>`
-        + day.slice(0, MAX).map(g => `<button class="mrow k-${kindOf(g.a)}" data-appt="${esc(g.a.id)}" data-m="${esc(g.a.member_id)}" title="${esc(tip(g) + (g.as.length > 1 ? ' · ' + timesTxt(g.ts) : ''))}">${avatar(g.a.member_id, 'xs')}<span class="mt"><b>${esc(g.as.length > 1 ? timesTxt(g.ts) : fmtTime(g.t).replace(':00', ''))}</b> ${esc(apptTitle(g.a))}</span></button>`).join('')
+        + day.slice(0, MAX).map(g => `<button class="mrow k-${kindOf(g.a)}" data-appt="${esc(g.a.id)}" data-m="${esc(showerOf(g.a) || '')}" title="${esc(tip(g) + (g.as.length > 1 ? ' · ' + timesTxt(g.ts) : ''))}">${avatar(showerOf(g.a), 'xs')}<span class="mt"><b>${esc(g.as.length > 1 ? timesTxt(g.ts) : fmtTime(g.t).replace(':00', ''))}</b> ${esc(apptTitle(g.a))}</span></button>`).join('')
         + (day.length > MAX ? `<button class="more" data-calday="${k}">${day.length - MAX} more</button>` : '') + '</div>';
     }
     $('#calMonth').innerHTML = html;
@@ -4152,13 +4162,13 @@ function renderCal() {
   html += `<div>${Array.from({ length: H1 - H0 }, (_, i) => `<div class="hr">${fmtHour(H0 + i)}</div>`).join('')}</div>`;
   days.forEach(ms => {
     html += `<div class="col" data-day="${localKey(ms)}" style="height:${(H1 - H0) * PX}px">` + lanes(evs.filter(x => x.day === localKey(ms))).map(({ x, lane, n }) =>
-      `<button class="evt k-${kindOf(x.a)} ${n >= 3 && c.view === 'week' ? 'tight' : ''}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}" style="top:${(x.start - H0) * PX + 2}px;height:${x.len * PX - 4}px;left:calc(${lane * 100 / n}% + 2px);width:calc(${100 / n}% - 4px)" title="${esc(tip(x))}">${agentChip(x.a, x.others)}<span class="evt-what"><b>${esc(fmtTime(x.t))}</b> <span class="tt">${esc(apptTitle(x.a))}</span>${bk(x) ? ` <span class="bk">· ${esc(bk(x))}</span>` : ''}</span></button>`).join('') + '</div>';
+      `<button class="evt k-${kindOf(x.a)} ${n >= 3 && c.view === 'week' ? 'tight' : ''}" data-appt="${esc(x.a.id)}" data-m="${esc(showerOf(x.a) || '')}" style="top:${(x.start - H0) * PX + 2}px;height:${x.len * PX - 4}px;left:calc(${lane * 100 / n}% + 2px);width:calc(${100 / n}% - 4px)" title="${esc(tip(x))}">${agentChip(x.a, x.others)}<span class="evt-what"><b>${esc(fmtTime(x.t))}</b> <span class="tt">${esc(apptTitle(x.a))}</span>${bk(x) ? ` <span class="bk">· ${esc(bk(x))}</span>` : ''}</span></button>`).join('') + '</div>';
   });
   $('#cal').innerHTML = html;
   $('#calList').innerHTML = days.map(ms => {
     const g = grouped(evs.filter(x => x.day === localKey(ms)));
     if (!g.length) return c.view === 'day' ? '<div class="section"><div class="empty-s">No showings or events this day.</div></div>' : '';
-    return `<div class="section"><h4>${esc(fmt(ms, { weekday: 'short', month: 'short', day: 'numeric' }))}</h4>${g.map(x => `<button class="inq calrow k-${kindOf(x.a)}" data-appt="${esc(x.a.id)}" data-m="${esc(x.a.member_id)}"><div class="row" style="justify-content:space-between"><b>${esc(timesTxt(x.ts))} · ${esc(KINDS[kindOf(x.a)])}</b>${agentChip(x.a, x.others)}</div><div>${esc(apptTitle(x.a))}${x.as.length > 1 ? ` <span class="bk">· ${esc(bookedTxt(x.as.length))}</span>` : ''} ${bcTag(x.a)}</div></button>`).join('')}</div>`;
+    return `<div class="section"><h4>${esc(fmt(ms, { weekday: 'short', month: 'short', day: 'numeric' }))}</h4>${g.map(x => `<button class="inq calrow k-${kindOf(x.a)}" data-appt="${esc(x.a.id)}" data-m="${esc(showerOf(x.a) || '')}"><div class="row" style="justify-content:space-between"><b>${esc(timesTxt(x.ts))} · ${esc(KINDS[kindOf(x.a)])}</b>${agentChip(x.a, x.others)}</div><div>${esc(apptTitle(x.a))}${x.as.length > 1 ? ` <span class="bk">· ${esc(bookedTxt(x.as.length))}</span>` : ''} ${bcTag(x.a)}</div></button>`).join('')}</div>`;
   }).join('') || '<div class="section"><div class="empty-s">Nothing this week.</div></div>';
 }
 function renderReport() {
@@ -4170,11 +4180,12 @@ function renderReport() {
   else if (!e) body = c.err ? `<div class="empty-s err">${esc(c.err)}</div>` : loader();
   else {
     const st = showingStats(e, pr.f, pr.t);
-    const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys()])] : [state.me.id];
+    const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys()])].sort((x, y) => (x === null) - (y === null)) : [state.me.id];   // v5.0: Unassigned (null) last
     const sum = ids.reduce((s, id) => { const x = st.per.get(id) || { n: 0, c: 0 }; return [s[0] + x.n, s[1] + x.c]; }, [0, 0]);
     body = `<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Showings</th><th>Collab</th><th>Canceled</th></tr></thead><tbody>${ids.map(id => {
       const x = st.per.get(id) || { n: 0, c: 0, with: new Map() };
       const w = [...x.with.entries()].sort((p, q) => q[1] - p[1] || memberName(p[0]).localeCompare(memberName(q[0]))).map(([m, k]) => `${k} with ${firstName(m) || 'Team'}`).join(', ');
+      if (id === null) return `<tr data-rep="unassigned"><td><span class="agentlink">${avatar(null, 'sm')}Unassigned</span></td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td></tr>`;
       return `<tr data-rep="${esc(id)}"><td>${mgr ? `<button class="agentlink" data-calagent="${esc(id)}" title="See ${esc(memberName(id))}'s calendar">${avatar(id, 'sm')}${esc(memberName(id) || 'Team member')}</button>` : `<span class="agentlink">${avatar(id, 'sm')}${esc(memberName(id))}</span>`}</td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td></tr>`;
     }).join('')}<tr class="total"><td>Total</td><td class="num">${sum[0]}</td><td></td><td class="num">${sum[1]}</td></tr></tbody></table></div>`;
   }
@@ -4189,7 +4200,7 @@ function findAppt(id) {
 }
 function apptPop(a) {
   const t = Date.parse(a.starts_at), can = isShowing(a) && isActive(a) && mayCancel(a);
-  showModal(`<h3 id="popTitle">${esc(apptTitle(a) || 'Event')}</h3><div class="sub" id="popSub">${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))} · ${esc(memberName(a.member_id) || 'Team member')}</div>
+  showModal(`<h3 id="popTitle">${esc(apptTitle(a) || 'Event')}</h3><div class="sub" id="popSub">${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))} · ${esc(showerName(a))}</div>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button>${can ? '<button class="btn danger" id="popCancel">Cancel showing</button>' : ''}</div>`);
   if (can) $('#popCancel').onclick = () => askCancel(a);
 }
@@ -4327,7 +4338,7 @@ function showingRowHtml(a, links, now, inTimeline, compact, tabActs) {
       + (isShowing(a) && !gone && mayCancel(a) ? `<button class="btn small" data-shedit="${esc(a.id)}" aria-label="Edit stops and notes">Edit stops</button>` : '')   // v4.0
       + (isShowing(a) && !gone && (stopsOf(a).length || a.prep_note || loopinMade(a)) ? shareBtns(a) : '');
     return `<div class="inq shrow ${gone ? 'gone' : ''}" ${inTimeline ? '' : `data-shrow="${esc(a.id)}"`}><div class="row" style="justify-content:space-between"><b>${esc(KINDS[kindOf(a)])} · ${esc(fmtDT(t))}</b>${bcTag(a)}${gone ? '<span class="pill bad">Canceled</span>' : ''}</div>
-      <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(memberName(a.member_id) || 'Team member')}${a.mode === 'virtual' ? ' · Virtual' : ''}</div>${stopsListHtml(a, compact)}
+      <div class="shtitle">${esc(apptTitle(a))}</div><div class="sub">${esc(showerName(a))}${a.mode === 'virtual' ? ' · Virtual' : ''}</div>${stopsListHtml(a, compact)}
       ${lk ? `<div class="reschedline">Rescheduled: ${esc(fmtDT(Date.parse(lk.from.starts_at)))} → ${esc(fmtDT(Date.parse(lk.to.starts_at)))}</div>` : ''}
       ${gone ? `<div class="cxline">Canceled by ${esc(who)} · ${esc(rel(a.canceled_at))} · ${esc(reasonText(a))}${note}</div>` : ''}${acts && (!inTimeline || tabActs) ? `<div class="row" style="margin-top:4px">${acts}</div>` : ''}</div>`;
 }
@@ -4762,7 +4773,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '4.9';
+const APP_VERSION = '5.0';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -4844,7 +4855,7 @@ function pageTags(S) {
 }
 function pageTeam(S) {
   const mem = (m) => `<div class="section" data-member="${esc(m.id)}"><div class="row"><span class="who">${avatar(m.id, 'sm')}<div style="min-width:0"><div class="name">${esc(m.full_name)}${m.active ? '' : ' <span class="pill warn">not active</span>'}</div><div class="sub">${esc(m.role)} · ${esc(m.email || '')}</div><div class="sub">${m.lead_gmail ? 'Lead Gmail: ' + esc(m.lead_gmail) : 'No lead Gmail'}${m.phone ? ' · ' + esc(m.phone) : ''}</div></div></span><span class="spacer"></span>
-    ${switchBox('data-mactive', m.id, m.active, 'Active')}${switchBox('data-msign', m.id, m.can_sign_in, 'Can sign in')}${switchBox('data-mexp', m.id, m.can_export || m.role === 'manager', 'Can export', m.role === 'manager', m.role === 'manager' ? 'Managers can always export' : '')}
+    ${switchBox('data-mactive', m.id, m.active, 'Active')}${switchBox('data-msign', m.id, m.can_sign_in, 'Can sign in')}${switchBox('data-mexp', m.id, m.can_export || m.role === 'manager', 'Can export', m.role === 'manager', m.role === 'manager' ? 'Managers can always export' : '')}${isMgr() ? switchBox('data-mbook', m.id, m.books_only === true, 'Books showings for others (does not show them)') : ''}
     <button class="btn small" data-medit="${esc(m.id)}" ${sdis()}>Edit</button></div>
     ${S.edit === 'member:' + m.id ? `<div class="editbox" style="margin-top:8px"><div class="fields"><div class="field"><label>Full name</label><input id="mName" value="${esc(m.full_name)}"></div>
       <div class="field"><label>Role</label><select id="mRole"><option value="agent" ${m.role === 'agent' ? 'selected' : ''}>Agent</option><option value="manager" ${m.role === 'manager' ? 'selected' : ''}>Manager</option></select></div>
@@ -5388,10 +5399,11 @@ $('#settingsBody').addEventListener('change', async e => {
   if (t.dataset.fhide != null) { await sWrite(() => api.updateField(t.dataset.fhide, { hidden: t.checked })); return; }
   if (t.dataset.agentstags != null) { await sWrite(() => api.setAgentsTags(t.checked)); return; }
   if (t.dataset.slhide != null) { await lWrite(() => listUpd(t.dataset.slhide, { hidden_from_agents: t.checked })); return; }
-  const m = S.team.find(x => String(x.id) === (t.dataset.mactive || t.dataset.msign || t.dataset.mexp));
+  const m = S.team.find(x => String(x.id) === (t.dataset.mactive || t.dataset.msign || t.dataset.mexp || t.dataset.mbook));
   if (!m) return;
   if (t.dataset.mactive != null) return setMember(m, { active: t.checked });
   if (t.dataset.mexp != null) return setMember(m, { can_export: t.checked });
+  if (t.dataset.mbook != null) return setMember(m, { books_only: t.checked });   // v5.0
   if (t.dataset.msign != null) {
     if (t.checked && m.role === 'agent') {
       t.checked = false;
