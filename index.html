@@ -1018,7 +1018,7 @@ function makeApi(url, key) {
     setZillow(on) { withZ = !!on; },
     // Bulk update one chunk (100 ids or fewer). Returns the updated rows.
     async bulkUpdate(ids, patch) {
-      if ('stage_id' in patch) state.opw.at = 0;   // v4.9: the Options Picked tile reloads
+      if ('stage_id' in patch) { state.opw.at = 0; state.opr.clear(); }   // v4.9 tile, v5.1 report: reload the Options Picked counts
       return ok(await sb.from('people').update(patch).in('id', ids).select(cols()));
     },
     async updatePerson(id, patch) { return ok(await sb.from('people').update(patch).eq('id', id).select(cols()).single()); },
@@ -1072,7 +1072,7 @@ function makeApi(url, key) {
         .eq('id', id).select(cols()).single());
     },
     async setStage(id, stageId, extra) {
-      state.opw.at = 0;   // v4.9: the Options Picked tile reloads
+      state.opw.at = 0; state.opr.clear();   // v4.9 tile, v5.1 report: reload the Options Picked counts
       return ok(await sb.from('people').update({ stage_id: stageId, ...(extra || {}) }).eq('id', id).select(cols()).single());
     },
     async addNote(personId, meId, body, kind = 'note') {   // v2.5: kind 'text_log' for Log text (the notes.kind check already allows it). v3.6: 'system' for an option status change (notes_insert has no kind rule)
@@ -1212,7 +1212,7 @@ const state = {
   set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
   view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
-  rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, syncFrom: undefined, leadAppts: new Map(),
+  rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, opr: new Map(), syncFrom: undefined, leadAppts: new Map(),
   cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
   bc: bcNone(),   // v4.6: the booking conflicts (managers only)
   dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null,   // v2.3: the duplicates filter, feature on/off, change counter, dismissed pairs, the open merge
@@ -1329,7 +1329,7 @@ function resetApp() {
     set: { page: null, loaded: false, loading: false, err: '', busy: false, edit: null, stages: [], fields: [], tags: [], team: [], agentsTags: false },
   rOn: true, renew: { list: [], loaded: false, err: '', at: 0, busyLoad: false, acct: '', showDismissed: false, busy: new Set(), confirm: new Map(), cOn: true, opened: new Set(), sel: new Set(), batch: null },
     view: 'dash', appts: [], apptCollab: new Map(), apptsAt: 0, apptBusy: false, apptErr: '', hits: [], hitErr: '',
-    rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
+    rc: new Map(), opw: { at: 0, w0: 0, err: '', now: null, last: null }, opr: new Map(), syncFrom: undefined, leadAppts: new Map(), cal: { view: 'week', at: 0, agent: '', preset: '7d', from: '', to: '', err: '' },
     bc: bcNone(), dup: false, dupOn: false, dupVer: 0, dismissed: new Set(), dupBusy: false, merge: null });
   BR = newBR(); inqCache.clear(); state.sel.clear(); applyTheme(null); syncFixed(); fnCache = { sig: '', fn: null }; cntMemo = null; srcMemo = null;
   $('#search').value = '';
@@ -4093,11 +4093,29 @@ function repRange() {
   if (c.preset === 'custom') { const a = dateOnly(c.from), b = dateOnly(c.to); return a && b && b >= a ? { f: +a, t: addDays(+b, 1) } : null; }
   return { f: +dayStart(-6), t: +dayStart(1) };
 }
+// v5.1 (Greg 2026-11-13): the Showings report counts the leads in Options Picked at any time in its range, per lead owner.
+// From pl_stage_week (supabase/26), which takes any range. Cached per range for 5 minutes; a stage change clears the cache.
+const OP_HISTORY_FROM = '2026-11-06';   // the day SQL 26 took its snapshot; no stage history before it
+async function loadOpRange(f, t) {
+  const k = f + '|' + t, cur = state.opr.get(k);
+  if (cur && (cur.busy || Date.now() - cur.at < 300000)) return;
+  const gen = loadGen, st = state.stages.find(s => /^options picked/i.test(s.name));
+  state.opr.set(k, { busy: true, at: 0, rows: null, err: '' });
+  let v;
+  try {
+    if (!st) throw new Error('no Options Picked stage');
+    v = { busy: false, at: Date.now(), rows: (await api.stageWeek(st.id, new Date(f).toISOString(), new Date(t).toISOString())) || [], err: '' };
+  } catch (err) { v = { busy: false, at: Date.now(), rows: null, err: err.message || 'error' }; }
+  if (gen !== loadGen) return;
+  state.opr.set(k, v);
+  if (state.view === 'calendar') renderCal();
+}
 async function loadCal() {
   if (!state.me) return;
   const gen = loadGen, r = calRange(), p = repRange();
   state.cal.err = '';
   renderCal();
+  if (p) loadOpRange(p.f, p.t);   // v5.1: its own errors; never blocks the report
   try { await Promise.all([getRange(r.f, r.t), p ? getRange(p.f, p.t) : null, state.syncFrom === undefined ? loadSyncFrom() : null]); }
   catch (e) { if (gen !== loadGen) return; state.cal.err = e.message || 'error'; }
   if (gen === loadGen) renderCal();
@@ -4180,14 +4198,21 @@ function renderReport() {
   else if (!e) body = c.err ? `<div class="empty-s err">${esc(c.err)}</div>` : loader();
   else {
     const st = showingStats(e, pr.f, pr.t);
-    const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys()])].sort((x, y) => (x === null) - (y === null)) : [state.me.id];   // v5.0: Unassigned (null) last
-    const sum = ids.reduce((s, id) => { const x = st.per.get(id) || { n: 0, c: 0 }; return [s[0] + x.n, s[1] + x.c]; }, [0, 0]);
-    body = `<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Showings</th><th>Collab</th><th>Canceled</th></tr></thead><tbody>${ids.map(id => {
+    // v5.1: Options Picked per lead owner. Unassigned = no owner, or an owner who is not active. A booker keeps a row for their own
+    // leads (Greg 2026-11-13: "give Yuli a row"): this column counts leads, not who shows them.
+    // '…' while the counts or the people load; '—' if they failed.
+    const o = state.opr.get(pr.f + '|' + pr.t), opWait = !o || o.busy || state.loading, opBad = !!(o && !o.busy && o.err), op = new Map();
+    if (!opWait && !opBad) for (const r of o.rows) { const p = byId.get(r.person_id), m = p && p.owner_id ? state.teamMap.get(p.owner_id) : null, id = m && m.active ? m.id : null; op.set(id, (op.get(id) || 0) + 1); }
+    const opCell = (id) => `<td class="num">${opWait ? '…' : opBad ? '—' : op.get(id) || 0}</td>`;
+    const ids = mgr ? [...new Set([...state.team.filter(m => m.active).map(m => m.id), ...st.per.keys(), ...op.keys()])].sort((x, y) => (x === null) - (y === null)) : [state.me.id];   // v5.0: Unassigned (null) last
+    const sum = ids.reduce((s, id) => { const x = st.per.get(id) || { n: 0, c: 0 }; return [s[0] + x.n, s[1] + x.c, s[2] + (op.get(id) || 0)]; }, [0, 0, 0]);
+    const opNote = `<p class="cnote" id="opNote">Options Picked: leads in that stage at any time in this range, counted for the lead's owner (Unassigned: no active agent owns it).${pr.f < +dateOnly(OP_HISTORY_FROM) ? ` Stage history starts ${esc(fmtShort(dateOnly(OP_HISTORY_FROM)))}, so earlier days are not counted.` : ''}${opBad ? ' Could not load the Options Picked counts.' : ''}</p>`;
+    body = `<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Showings</th><th>Collab</th><th>Canceled</th><th>Options Picked</th></tr></thead><tbody>${ids.map(id => {
       const x = st.per.get(id) || { n: 0, c: 0, with: new Map() };
       const w = [...x.with.entries()].sort((p, q) => q[1] - p[1] || memberName(p[0]).localeCompare(memberName(q[0]))).map(([m, k]) => `${k} with ${firstName(m) || 'Team'}`).join(', ');
-      if (id === null) return `<tr data-rep="unassigned"><td><span class="agentlink">${avatar(null, 'sm')}Unassigned</span></td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td></tr>`;
-      return `<tr data-rep="${esc(id)}"><td>${mgr ? `<button class="agentlink" data-calagent="${esc(id)}" title="See ${esc(memberName(id))}'s calendar">${avatar(id, 'sm')}${esc(memberName(id) || 'Team member')}</button>` : `<span class="agentlink">${avatar(id, 'sm')}${esc(memberName(id))}</span>`}</td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td></tr>`;
-    }).join('')}<tr class="total"><td>Total</td><td class="num">${sum[0]}</td><td></td><td class="num">${sum[1]}</td></tr></tbody></table></div>`;
+      if (id === null) return `<tr data-rep="unassigned"><td><span class="agentlink">${avatar(null, 'sm')}Unassigned</span></td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td>${opCell(null)}</tr>`;
+      return `<tr data-rep="${esc(id)}"><td>${mgr ? `<button class="agentlink" data-calagent="${esc(id)}" title="See ${esc(memberName(id))}'s calendar">${avatar(id, 'sm')}${esc(memberName(id) || 'Team member')}</button>` : `<span class="agentlink">${avatar(id, 'sm')}${esc(memberName(id))}</span>`}</td><td class="num">${x.n}</td><td>${w ? esc(w) : '<span class="sub">—</span>'}</td><td class="num">${x.c}</td>${opCell(id)}</tr>`;
+    }).join('')}<tr class="total"><td>Total</td><td class="num">${sum[0]}</td><td></td><td class="num">${sum[1]}</td><td class="num">${opWait ? '…' : opBad ? '—' : sum[2]}</td></tr></tbody></table></div>${opNote}`;
   }
   el.innerHTML = `<h2>Showings${pr ? ' · ' + esc(rangeLabel(pr.f, pr.t)) : ''}${state.syncFrom ? `<span class="sub" style="font-weight:500">Data from ${esc(fmtShort(state.syncFrom))}</span>` : ''}</h2>
     <div class="repbar"><span class="seg" id="repPresets">${presets.map(([k, t]) => `<button data-preset="${k}" aria-pressed="${c.preset === k}">${t}</button>`).join('')}</span>
@@ -4773,7 +4798,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '5.0';
+const APP_VERSION = '5.1';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
