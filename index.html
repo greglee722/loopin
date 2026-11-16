@@ -344,6 +344,9 @@ textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--
 .yr-pick { display: flex; gap: 6px; align-items: center; font-size: 13px; white-space: nowrap; }
 .optedit { display: flex; flex-wrap: wrap; gap: 6px; } .optedit input, .optedit select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); min-width: 0; } .optedit [data-oe="addr"] { flex: 1 1 220px; } .optedit [data-oe="offer"] { flex: 1 1 160px; }
 .opt .pen { opacity: .6; } .opt:hover .pen { opacity: 1; }
+.optchk { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; }
+.optbar { align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2, var(--surface)); margin-bottom: 4px; }
+.optnote-btn.has { color: var(--ok); }
 .toshow { border: 1px dashed color-mix(in srgb, var(--ok) 55%, transparent); background: var(--ok-soft); border-radius: 8px; padding: 10px 12px; margin: 4px 0 10px; display: grid; gap: 6px; justify-items: start; }
 .toshow .row { width: 100%; } .toshow .pen, .shcard .pen { opacity: .75; } .toshow .pen:hover, .shcard .pen:hover { opacity: 1; }
 .pickrow { display: flex; gap: 8px; align-items: center; font-size: 14px; }
@@ -1082,6 +1085,8 @@ function makeApi(url, key) {
     async addOptions(rows) { return ok(await sb.from('lead_options').insert(rows).select(OPT_COLS)); },
     async updateOption(id, patch) { const r = ok(await sb.from('lead_options').update(patch).eq('id', id).select(OPT_COLS)); if (!r.length) throw new Error('Not saved: you do not have access to this item.'); return r[0]; },
     async deleteOption(id) { gone(await sb.from('lead_options').delete().eq('id', id).select('id')); },
+    // v5.2: one PATCH for many options (the bulk status bar). Fewer rows back than ids = row-level security refused some.
+    async updateOptions(ids, patch) { const r = ok(await sb.from('lead_options').update(patch).in('id', ids).select(OPT_COLS)); if (r.length !== ids.length) throw new Error('Not saved: you do not have access to some of these items.'); return r; },
     async yglLookup(ids) { return ok(await sb.rpc('pl_ygl_lookup', { p_ids: ids })); },
     // v3.8: the ygl-page Edge Function reads the public YGL share page for links the nightly copy misses. paths = the part after https://ygl.is/ . Returns [{ path, ygl_id, status: ok|off_market|not_found|error, address, neighborhood, price, beds, available }].
     async yglPage(paths) {
@@ -2406,7 +2411,9 @@ function onChange(e) {
   if (t.dataset.sel) toggleSel(t.dataset.sel, t.checked);
   else if (t.dataset.contact) toggleContacted(t.dataset.contact, t.checked);
   else if (t.dataset.stage) changeStage(t.dataset.stage, +t.value);
-  else if (t.dataset.optstatus) { if (t.value === 'shared') optStatus(t.dataset.optstatus, t.value); else { OPT.st = t.value; setEdit('optst:' + t.dataset.optstatus); } }
+  else if (t.dataset.optstatus) optStatus(t.dataset.optstatus, t.value);
+  else if (t.dataset.optchk) { if (t.checked) OPT.sel.add(t.dataset.optchk); else OPT.sel.delete(t.dataset.optchk); renderPanel(); }
+  else if ('optall' in t.dataset) { OPT.sel = new Set(t.checked && state.detail ? state.detail.options.map(o => o.id) : []); renderPanel(); }
   else if (t.dataset.yr) optYr(t);
 }
 async function toggleContacted(id, on) {
@@ -2804,7 +2811,7 @@ async function saveEdit() {
     const r = $('#eReason').value; if (!r) return editErr('Pick a reason.');
     return done(await editWrite(p, () => api.updatePerson(p.id, { nonworkable_reason: r })));
   }
-  if (kind === 'optst') { const r = await optStatus(arg, OPT.st, $('#oStNote').value.trim()); if (state.open === p.id) done(r); return; }
+  if (kind === 'optnote') { const r = await optNoteSave(p, arg); if (state.open === p.id) done(r); return; }
   if (kind === 'opt') { const r = arg === 'new' ? await optAdd(p) : await optSave(p, arg); if (state.open === p.id) done(r); return; }
   if (kind === 'note') {
     const body = $('#eNote').value.trim(), n = state.detail && state.detail.notes.find(x => String(x.id) === arg);
@@ -2878,8 +2885,8 @@ const OPT_FEE = { none: 'No fee', half: 'Half fee', full: 'Tenant pays fee' };
 const YGL_URL = /yougotlistings\.com|ygl\.is/i;
 const OPT_MAX_IDS = 50;   // pl_ygl_lookup refuses more
 const OFF_MARKET_MSG = 'Off market on YGL — check the rent.';
-let OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false };   // add-one hidden values; the paste text; the review rows
-function resetOpt() { OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false }; }
+let OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false, sel: new Set() };   // add-one hidden values; the paste text; the review rows; v5.2: the checked option ids
+function resetOpt() { OPT = { url: '', lid: '', avail: null, off: false, len: 0, paste: '', rows: null, wait: false, sel: new Set() }; }
 const bedsLabel = (n) => n == null || n === '' || isNaN(n) || +n < 0 ? '' : +n >= 5 ? '5+ Beds' : OPT_BEDS[+n];
 const normAddr = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // YGL gives "09/01/2026" (live) or "2026-12-01". Anything else, or a day that does not exist, is null and is not shown.
@@ -2941,10 +2948,11 @@ function optRowHtml(o, can, dis) {
   const addr = web ? `<a class="maillink" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.address)} ↗</a>` : esc(o.address);
   const by = o.shared_by ? memberName(o.shared_by) : '';
   const meta = [o.rent != null ? money(o.rent) + '/mo' : '', o.beds ? esc(o.beds) : '', o.available_on ? 'avail. ' + esc(fmtDate(o.available_on)) : '', `shared ${esc(fmtShort(o.shared_at))}${by ? ' by ' + esc(by) : ''}`].filter(Boolean).join(' · ');
-  return `<div class="opt" data-opt="${esc(o.id)}"><div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}${o.off_market ? ` <span class="pill off-tag">Off market${can ? `<button class="tag-x" data-offclr="${esc(o.id)}" aria-label="Remove the Off market tag from ${esc(o.address)}" ${dis}>×</button>` : ''}</span>` : ''}<div class="sub">${meta}</div>${o.note ? `<div class="opt-note" style="white-space:pre-wrap;margin-top:2px">${esc(o.note)}</div>` : ''}</div>
+  const noteBtn = can && o.status !== 'shared' ? `<button class="btn small soft optnote-btn${o.note ? ' has' : ''}" data-edit="optnote:${esc(o.id)}" aria-label="${o.note ? 'Edit the note on' : 'Add a note to'} ${esc(o.address)}" ${dis}>${o.note ? 'Note ✓' : 'Note'}</button>` : '';
+  return `<div class="opt" data-opt="${esc(o.id)}">${can && state.detail && state.detail.options.length > 1 ? `<input type="checkbox" class="optchk" data-optchk="${esc(o.id)}" ${OPT.sel.has(o.id) ? 'checked' : ''} aria-label="Select ${esc(o.address)}" ${dis}>` : ''}<div class="grow" style="flex:1 1 200px;min-width:0"><b>${addr}</b>${ygl ? ' <span class="pill info">YGL</span>' : ''}${optPills(o)}${o.off_market ? ` <span class="pill off-tag">Off market${can ? `<button class="tag-x" data-offclr="${esc(o.id)}" aria-label="Remove the Off market tag from ${esc(o.address)}" ${dis}>×</button>` : ''}</span>` : ''}<div class="sub">${meta}</div>${o.note ? `<div class="opt-note" style="white-space:pre-wrap;margin-top:2px">${esc(o.note)}</div>` : ''}</div>
     ${can ? `<button class="pen" data-edit="opt:${esc(o.id)}" aria-label="Edit ${esc(o.address)}" ${dis}>${penSvg}</button>` : ''}
     <select class="optsel ${o.status === 'not_interested' ? 'passed' : esc(o.status)}" data-optstatus="${esc(o.id)}" aria-label="Status of ${esc(o.address)}" ${can ? dis : 'disabled'}>${Object.entries(OPT_STATUS).map(([k, t]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-    ${can ? `<button class="x" data-del="option" data-id="${esc(o.id)}" aria-label="Remove ${esc(o.address)}" ${dis}>×</button>` : ''}</div>`;
+    ${noteBtn}${can ? `<button class="x" data-del="option" data-id="${esc(o.id)}" aria-label="Remove ${esc(o.address)}" ${dis}>×</button>` : ''}</div>`;
 }
 // The add and edit form: the same fields. Fields have ids, so a redraw keeps what was typed.
 function optFormHtml(o, dis, isNew) {
@@ -2955,9 +2963,15 @@ function optFormHtml(o, dis, isNew) {
     ${optFeeSel(v.broker_fee, 'id="oFee" aria-label="Broker fee"')}<input id="oOffer" data-oe="offer" value="${esc(v.offer || '')}" placeholder="Offer, e.g. 1 free month" aria-label="Offer">
     <textarea id="oNote" style="flex:1 1 100%" placeholder="Notes, e.g. picked for the stainless steel appliances" aria-label="Notes">${esc(v.note || '')}</textarea></div>`, dis).replace('>Save<', `>${isNew ? 'Add option' : 'Save'}<`);
 }
-// v3.7: Picked / Not interested asks why first (optional). The answer becomes the option's note.
-function optStatusHtml(o, dis) {
-  return `<div class="opt" data-opt="${esc(o.id)}" style="display:block"><b>${esc(OPT_STATUS[OPT.st])}: ${esc(o.address)}</b>${editbox(`<textarea id="oStNote" placeholder="Why? (optional), e.g. ${OPT.st === 'picked' ? 'stainless steel appliances' : 'no dishwasher'}" aria-label="Why ${esc(OPT_STATUS[OPT.st])}">${esc(o.note || '')}</textarea>`, dis)}</div>`;
+// v5.2: the Note button (shown after Picked / Not interested) opens this box. The text is the option's note. v3.7 asked this before the status saved; that slowed agents down.
+function optNoteHtml(o, dis) {
+  return `<div class="opt" data-opt="${esc(o.id)}" style="display:block"><b>${esc(OPT_STATUS[o.status])}: ${esc(o.address)}</b>${editbox(`<textarea id="oStNote" placeholder="Why? e.g. ${o.status === 'picked' ? 'stainless steel appliances' : 'no dishwasher'}" aria-label="Note on ${esc(o.address)}">${esc(o.note || '')}</textarea>`, dis)}</div>`;
+}
+// v5.2: the bar over the list when options are checked. A status button sets it on every checked option.
+function optBarHtml(opts, dis) {
+  const ids = opts.filter(o => OPT.sel.has(o.id)).map(o => o.id), all = ids.length === opts.length;
+  return `<div class="row optbar" id="optBar"><label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="optchk" data-optall ${all ? 'checked' : ''} aria-label="Select all options" ${dis}>${ids.length ? `${ids.length} selected` : 'Select all'}</label>`
+    + (ids.length ? Object.entries(OPT_STATUS).map(([k, t]) => `<button class="btn small soft" data-optbulk="${k}" ${dis}>${t}</button>`).join('') + `<button class="btn small" data-optclr ${dis}>Clear</button>` : '') + '</div>';
 }
 function optPasteHtml(dis) {
   return `<div class="editbox"><div class="sub">Paste one listing per line, like "https://ygl.is/33ou/148542474 11 Peterborough St #12 (no broker fee) (1 free month)". Lines under "OP" are marked Picked. A line with no link keeps the address as typed.</div>
@@ -2986,7 +3000,8 @@ function optionsHtml(p, d) {
     : `<div class="row" style="margin-top:8px"><button class="btn small soft" data-edit="opt:new" ${dis}>+ Add option</button><button class="btn small soft" data-edit="optpaste" ${dis}>Paste a list</button></div>`;
   return `<div class="sub" id="optSummary" style="margin-bottom:4px">${opts.length ? `${picked} picked of ${opts.length} shared` : 'Add the listings you send this renter. Mark the ones they pick.'}</div>`
     + (can && picked ? `<div class="row" style="margin-bottom:4px"><button class="btn small soft" data-newshowing="${esc(p.id)}" ${dis}>Schedule a showing</button></div>` : '')   // v4.0
-    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optst:' + o.id && can && OPT.st ? optStatusHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add
+    + (can && opts.length > 1 ? optBarHtml(opts, dis) : '')
+    + opts.map(o => state.edit === 'opt:' + o.id && can ? optFormHtml(o, dis, false) : state.edit === 'optnote:' + o.id && can ? optNoteHtml(o, dis) : optRowHtml(o, can, dis)).join('') + add
     + (OPT.wait ? `<div class="sub" id="yglWait" style="display:flex;align-items:center;gap:6px">${loader('Looking up on YGL…')}Looking up on YGL…</div>` : '');
 }
 const readOptForm = () => ({ address: $('#oAddr').value.trim(), rent: $('#oRent').value.trim(), beds: $('#oBeds').value, fee: $('#oFee').value, offer: $('#oOffer').value.trim(), note: $('#oNote').value.trim() });
@@ -3032,22 +3047,38 @@ function askDeleteOpt(p, oid) {
     await optRun(p, async () => { await api.deleteOption(oid); if (state.open === p.id && state.detail) state.detail.options = state.detail.options.filter(x => x.id !== oid); });
   };
 }
-// Status select: Shared / Picked / Not interested. Shared saves at once; Picked and Not interested first ask why (optStatusHtml), save the answer as the option's note, and write a system note ("Not interested in 24 Queensberry St: no dishwasher"). If the system note fails the status stays and a toast says so.
-async function optStatus(oid, status, note) {
-  const p = byId.get(state.open), id = state.open, o = state.detail && state.detail.options.find(x => x.id === oid);
-  if (!p || !o || !OPT_STATUS[status] || (o.status === status && note === undefined)) { renderPanel(); return false; }
+// Status select: Shared / Picked / Not interested. v5.2: every status saves at once (no "why" box; the Note button adds the reason after). Picked and Not interested write a system note ("Not interested in 24 Queensberry St"). If the system note fails the status stays and a toast says so.
+async function optStatus(oid, status) { return optSetStatus([oid], status); }
+// v5.2: one or many options. One PATCH, one system note for the batch ("Picked 15 Symphony Rd #6, 51 Delle Ave #1"). Options that already have the status are skipped.
+async function optSetStatus(oids, status) {
+  const p = byId.get(state.open), id = state.open, all = state.detail ? state.detail.options : [];
+  const os = oids.map(x => all.find(o => o.id === x)).filter(o => o && o.status !== status);
+  if (!p || !os.length || !OPT_STATUS[status]) { renderPanel(); return false; }
   if (!canEdit(p)) { toast(readOnlyWhy(p)); renderPanel(); return false; }
   const ok = await optRun(p, async () => {
-    const r = await api.updateOption(oid, note === undefined ? { status } : { status, note });
-    if (state.open === id && state.detail) Object.assign(o, r);
+    const rs = os.length === 1 ? [await api.updateOption(os[0].id, { status })] : await api.updateOptions(os.map(o => o.id), { status });
+    if (state.open === id && state.detail) for (const r of rs) { const o = os.find(x => x.id === r.id); if (o) Object.assign(o, r); }
     if (status === 'shared') return;
     try {
-      const note2 = await api.addNote(id, state.me.id, (status === 'picked' ? 'Picked ' : 'Not interested in ') + o.address + (note ? ': ' + note : ''), 'system');
+      const note2 = await api.addNote(id, state.me.id, (status === 'picked' ? 'Picked ' : 'Not interested in ') + os.map(o => o.address).join(', '), 'system');
       if (state.open === id && state.detail) state.detail.notes.unshift(note2);
     } catch (e) { toast('Status saved, but the activity note was not: ' + (e.message || 'error')); }
   });
   if (ok) await reread(id);
   return ok;
+}
+async function optBulk(status) {
+  const ids = (state.detail ? state.detail.options : []).filter(o => OPT.sel.has(o.id)).map(o => o.id); if (!ids.length) return;
+  const id = state.open, ok = await optSetStatus(ids, status);
+  if (ok && state.open === id) { OPT.sel.clear(); renderPanel(); toast(`${ids.length} option${ids.length === 1 ? '' : 's'} set to ${OPT_STATUS[status]}.`); }
+}
+// v5.2: the Note box saves the option's note only (no system note).
+async function optNoteSave(p, oid) {
+  const id = p.id, note = $('#oStNote').value.trim();
+  return optRun(p, async () => {
+    const r = await api.updateOption(oid, { note });
+    if (state.open === id && state.detail) { const i = state.detail.options.findIndex(x => x.id === oid); if (i >= 0) state.detail.options[i] = r; }
+  });
 }
 // v3.8: links pl_ygl_lookup did not find go to the ygl-page function (it reads the public share page). Returns Map lid → { row (same shape as a lookup row), off }. It never throws: any failure gives an empty map, so adding an option is never blocked.
 async function yglPageFill(items) {
@@ -3137,6 +3168,8 @@ $('#panel').addEventListener('click', e => {
   if (e.target.closest('[data-ylook]')) optLookup();
   else if (e.target.closest('[data-ysave]')) optReviewSave();
   else if (e.target.closest('[data-offclr]')) optOffClear(e.target.closest('[data-offclr]').dataset.offclr);
+  else if (e.target.closest('[data-optbulk]')) { const b = e.target.closest('[data-optbulk]'); if (!b.disabled) optBulk(b.dataset.optbulk); }
+  else if (e.target.closest('[data-optclr]')) { OPT.sel.clear(); renderPanel(); }
 });
 // v3.9: the × on an option's Off market tag clears lead_options.off_market (the listing is back on the market, or the agent checked it).
 async function optOffClear(oid) {
@@ -4798,7 +4831,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.2';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
