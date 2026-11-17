@@ -1065,6 +1065,9 @@ function makeApi(url, key) {
     async addTemplate(row) { return ok(await sb.from('templates').insert(row).select(TPL_COLS).single()); },
     async deleteTemplate(id) { gone(await sb.from('templates').delete().eq('id', id).select('id')); },
     async templateInUse(id) { return ok(await sb.from('auto_response_steps').select('template_id').eq('template_id', id).limit(1)).length > 0; },
+    // v5.3: Auto responses. Two RPCs only. The status never returns a renter name, a relay address or message text; the app cannot email anyone.
+    async autoReplyStatus() { return ok(await sb.rpc('pl_auto_reply_status')); },
+    async setAutoReplyMode(id, mode) { return ok(await sb.rpc('pl_auto_reply_set_mode', { p_rule_id: id, p_mode: mode })); },
     async heartbeats() { return ok(await sb.from('script_heartbeats').select('member_id,last_run_at,last_result')); },
     // Confirm in Zillow: the status RPC never returns a link; the URL RPC is the only way the app gets one, and it is never stored or shown.
     async confirmStatus() { return ok(await sb.rpc('pl_listing_confirm_status')); },
@@ -4831,7 +4834,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '5.2';
+const APP_VERSION = '5.3';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -4849,7 +4852,7 @@ async function openSettings() {
     S.loading = true; renderSettings();
     try { await loadSettingsData(); } catch (e) { S.err = e.message || 'Could not load settings.'; }
     S.loading = false;
-    if (S.loaded) { loadTpl(); loadHb(); }
+    if (S.loaded) { loadTpl(); loadHb(); loadAr(); }
   }
   renderSettings();
 }
@@ -5040,6 +5043,25 @@ async function loadHb() {
   catch (e) { if (gen !== loadGen) return; S.hb = null; S.hbErr = e.message || 'Could not read the system check.'; }
   S.hbBusy = false; if (!S.page || S.page === 'system') renderSettings();
 }
+async function loadAr() {
+  const S = state.set, gen = loadGen; S.arBusy = true;
+  try { const r = await api.autoReplyStatus(); if (gen !== loadGen) return; S.ar = Array.isArray(r) ? r : []; S.arErr = ''; }
+  catch (e) { if (gen !== loadGen) return; S.ar = null; S.arErr = e.message || 'Could not read the auto responses.'; }
+  S.arBusy = false; if (!S.page || S.page === 'autoreply') renderSettings();
+}
+const AR_MODES = [['off', 'Off'], ['test', 'Test'], ['live', 'Live']];
+const AR_MODE_WORDS = { off: 'Off', test: 'Test: nothing is sent', live: 'Live: sending' };
+const arAlerts = (r) => (Number(r.failed_today) || 0) + (Array.isArray(r.unlisted) ? r.unlisted.length : 0);
+async function arSetMode(id, mode) {
+  const S = state.set; if (S.arSaving) return;
+  S.arSaving = true; renderSettings();
+  try { await api.setAutoReplyMode(id, mode); S.arSaving = false; await loadAr(); toast('Saved.'); }
+  catch (e) { S.arSaving = false; renderSettings(); toast(e.message || 'The mode was not saved.'); }
+}
+function arLiveConfirm(id) {
+  showModal(`<h3 id="arLiveText">Switch to Live?</h3><p style="margin:0;color:var(--ink-2)">Pause FUB plan 35 in Follow Up Boss first. Two systems sending means the renter gets two emails.</p><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-close>Cancel</button><button class="btn primary" id="arLiveGo">Switch to Live</button></div>`);
+  $('#arLiveGo').onclick = () => { closeModal(); arSetMode(id, 'live'); };
+}
 function sysRows(S) {
   const hb = new Map((S.hb || []).map(h => [h.member_id, h]));
   return S.team.filter(m => m.active && m.lead_gmail).sort(byNameAsc).map(m => {
@@ -5059,6 +5081,14 @@ function hbSummary(r) {
   return ['received', 'new', 'created', 'processed', 'skipped', 'errors'].filter(k => Number.isFinite(r[k])).map(k => `${r[k]} ${k}`).join(', ');
 }
 
+const arCardWarn = (S) => !!(S.ar && S.ar[0] && arAlerts(S.ar[0]) > 0);
+function arCardSub(S) {
+  if (S.arErr) return 'Not available right now';
+  if (!S.ar) return 'Checking…';
+  const r = S.ar[0]; if (!r) return 'Not set up yet';
+  const n = arAlerts(r);
+  return esc(AR_MODE_WORDS[r.mode] || String(r.mode)) + (n ? ` · ${n} ${n === 1 ? 'needs' : 'need'} a look` : '');
+}
 function pageHome(S) {
   const T = S.tpl, tc = T && T.rows ? T.rows.length : null, issues = S.hb ? sysRows(S).filter(r => r.st !== 'ok').length : null;
   const card = (pg, icon, title, sub, cls = '') => `<button class="custcard" data-setpage="${pg}"><span class="ci" aria-hidden="true">${icon}</span><b>${title}</b><span class="cs ${cls}">${sub}</span></button>`;
@@ -5066,7 +5096,7 @@ function pageHome(S) {
   const group = (title, cards) => `<div class="cust"><h2>${title}</h2><div class="custcards">${cards.join('')}</div></div>`;
   const cv = (v) => `<span class="cv">${v}</span>`;
   return group('User Settings', [card('mine', avatar(state.me.id, 'sm'), 'My settings', 'Your name, phone and email, plus theme.')])
-    + group('Automation', [soon('⚡', 'Auto responses', 'Emails that go out on their own when a new lead comes in, then follow up.'),
+    + group('Automation', [card('autoreply', '⚡', 'Auto responses', arCardSub(S), arCardWarn(S) ? 'warn' : ''),
       card('templates', '✉️', 'Email templates', `${cv(tc == null ? '—' : `${tc.toLocaleString('en-US')} template${tc === 1 ? '' : 's'}`)} Write the emails your team sends, with blanks like {First name}.`)])
     + group('Customize', [card('fields', '✍️', 'Custom fields', `${cv(S.fields.length)} labels, order, options`), card('stages', '🧰', 'Stages', `${cv(S.stages.length)} order, closes the lead`),
       card('tags', '🏷️', 'Tags', `${cv(S.tags.length)} who can create tags`), card('lists', '📋', 'Smart lists', `${cv(teamLists().length)} order, rename, hide or delete the team lists in the People sidebar.`),
@@ -5211,7 +5241,7 @@ async function tplDelete() {
 function goSetPage(pg) {
   const S = state.set, go = () => {
     const from = S.page; S.page = pg || null; S.edit = null; S.my = null; if (S.tpl) S.tpl.draft = null;
-    if (pg === 'templates' && from !== 'templates') loadTpl(); if (pg === 'system' && from !== 'system') loadHb(); if (pg === 'areas') loadBreakdown();
+    if (pg === 'templates' && from !== 'templates') loadTpl(); if (pg === 'system' && from !== 'system') loadHb(); if (pg === 'autoreply' && from !== 'autoreply') loadAr(); if (pg === 'areas') loadBreakdown();
     renderSettings();
   };
   if (!tplDirty()) return go();
@@ -5228,6 +5258,27 @@ function pageSystem(S) {
       <div class="sysst">${st === 'ok' ? `<span class="okline">✓ Checked ${agoText(age)}</span>` : st === 'late' ? `<span class="warntext">⚠ Checked ${agoText(age)}. New leads may be missing.</span>` : '<span class="warntext">Not connected yet</span>'}${sm ? `<div class="sub">${esc(sm)}</div>` : ''}</div></div>`; }).join('') || '<div class="empty-s">No team member has a lead Gmail yet.</div>'}</div>
     <p class="sub" id="sysSync" style="margin-top:10px">Follow Up Boss data syncs every night at 2:30 AM from Greg's Mac.</p>`;
 }
+const arStamp = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const AR_PILL = { sent: 'ok', failed: 'bad', skipped: 'off-tag', test: 'info', queued: 'info', sending: 'info' };
+function arSection(S, r) {
+  const unl = Array.isArray(r.unlisted) ? r.unlisted : [], log = (Array.isArray(r.log) ? r.log : []).slice(0, 20), accts = Array.isArray(r.zillow_accounts) ? r.zillow_accounts : [];
+  const lastMin = r.last_run_at ? (Date.now() - Date.parse(r.last_run_at)) / 60000 : NaN, failed = Number(r.failed_today) || 0, cmp = r.compare;
+  const dv = (label, val) => `<div class="dvals"><span class="dlabel">${label}</span><span class="dval">${val}</span><span></span></div>`;
+  return `<div class="section" id="arBox" data-arrule="${esc(r.id)}"><h4>${esc(r.name || 'Zillow auto reply')}</h4>
+    <p class="sub" style="margin:0 0 10px">Answers new Zillow leads from the listed accounts with the template, from the sender's Gmail. Test mode records what would go out and sends nothing.</p>
+    <div class="row" style="margin-bottom:10px"><span class="seg" role="group" aria-label="Mode" id="arMode">${AR_MODES.map(([v, t]) => `<button data-armode="${v}" data-arid="${esc(r.id)}" aria-pressed="${r.mode === v}" ${S.arSaving ? 'disabled' : ''}>${t}</button>`).join('')}</span></div>
+    <div id="arMeta">${dv('Template', esc(r.template_name || 'None'))}${dv('Sender', esc(r.sender_name || 'None'))}${dv('Zillow accounts', accts.length ? accts.map(a => `<div>${esc(a)}</div>`).join('') : 'None')}
+    ${dv('Last script run', isFinite(lastMin) ? esc(agoText(Math.max(0, lastMin))) : 'No run yet')}${dv('Today', `${esc(Number(r.skipped_today) || 0)} skipped · ${failed > 0 ? `<span class="warntext">${esc(failed)} failed</span>` : '0 failed'}`)}</div>
+    ${unl.length ? `<div class="syscheck bad" id="arAlert" style="margin-top:12px"><b>New leads came from an account that is not on the list. They were not answered.</b>${unl.map(u => `<div class="arunl">${esc(u.account)}: ${esc(u.n)} in the last 7 days</div>`).join('')}</div>` : ''}
+    ${r.compare_since && cmp ? `<div id="arCompare" style="margin-top:12px"><b>Comparison</b><div>Since ${esc(fmtShort(r.compare_since))}: ${esc(Number(cmp.loopin_only) || 0)} sent by LoopIn with no email in Ricky's Sent folder · ${esc(Number(cmp.sent_only) || 0)} emails in the Sent folder with no LoopIn row.</div><div class="sub">Both should be 0 before Live.</div></div>` : ''}
+    <h4 style="margin-top:14px">Log</h4>${log.length ? `<div class="tablewrap" id="arLog"><table><thead><tr><th>Time</th><th>Account</th><th>Status</th><th>Reason</th></tr></thead><tbody>${log.map(l => `<tr><td class="nowrap">${esc(arStamp(l.created_at))}</td><td>${esc(l.zillow_account || '')}</td><td><span class="pill ${AR_PILL[l.status] || 'info'}">${esc(l.status || '')}</span></td><td>${esc(l.reason || '')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-s" id="arLogEmpty">Nothing yet.</div>'}</div>`;
+}
+function pageAutoReply(S) {
+  const head = subHead('Auto responses', 'Emails that go out on their own when a new Zillow lead comes in.', `<button class="btn small" data-arrefresh ${S.arBusy ? 'disabled' : ''}>Refresh</button>`);
+  if (S.arErr) return head + `<div class="empty-s" id="arErr">${esc(S.arErr)}</div>`;
+  if (!S.ar) return head + loader('Checking…');
+  return head + (S.ar.map(r => arSection(S, r)).join('') || '<div class="empty-s">No auto response is set up yet.</div>');
+}
 function renderSettings() {
   const el = $('#settingsBody'), S = state.set;
   if (!isMgr()) return;
@@ -5236,7 +5287,7 @@ function renderSettings() {
   if (S.err) html = `<div class="empty-s" id="setLoadErr">${esc(S.err)} <button class="btn small" id="setRetry">Try again</button></div>`;
   else if (!S.loaded) html = loader();
   else if (!S.page) html = pageHome(S);
-  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, areas: pageAreas, team: pageTeam, about: pageAbout }[S.page](S);
+  else html = { mine: pageMine, templates: pageTemplates, system: pageSystem, autoreply: pageAutoReply, stages: pageStages, fields: pageFields, tags: pageTags, lists: pageLists, areas: pageAreas, team: pageTeam, about: pageAbout }[S.page](S);
   const snap = {}; el.querySelectorAll('input[id], select[id], textarea[id]').forEach(x => { snap[x.id] = x.value; });
   el.innerHTML = html;
   for (const [id, v] of Object.entries(snap)) { const x = el.querySelector('#' + CSS.escape(id)); if (x && !x.value && /^(newStage|nf|newTag|nm|nrule)/.test(id)) x.value = v; }
@@ -5339,6 +5390,11 @@ $('#settingsBody').addEventListener('click', async e => {
   const tl = el('[data-tlead]'); if (tl) { const T = tplTS(); T.prevId = tl.dataset.tlead; T.prevQ = ''; const q = $('#tdLeadQ'); if (q) q.value = ''; refreshPrev(); ensureInq(T.prevId); return; }
   if (el('[data-tplsave]')) { tplSave(); return; }
   if (el('[data-tpldel]')) { tplDelete(); return; }
+  if (el('[data-arrefresh]')) { if (!S.arBusy) { S.arBusy = true; renderSettings(); loadAr(); } return; }
+  const arm = el('[data-armode]'); if (arm) {
+    const r = (S.ar || []).find(x => String(x.id) === arm.dataset.arid), v = arm.dataset.armode; if (!r || arm.disabled || S.arSaving || r.mode === v) return;
+    if (v === 'live') arLiveConfirm(r.id); else arSetMode(r.id, v); return;
+  }
   if (el('[data-hbrefresh]')) { if (!S.hbBusy) { S.hbBusy = true; renderSettings(); loadHb(); } return; }
   if (el('[data-setcancel]')) { S.edit = null; renderSettings(); return; }
   const mv = el('[data-smove]'); if (mv) { if (!mv.disabled) (mv.dataset.smove === 'list' ? reorderLists : reorder.bind(null, mv.dataset.smove))(+mv.dataset.i, +mv.dataset.i + +mv.dataset.d); return; }
