@@ -4834,7 +4834,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '5.4';
+const APP_VERSION = '5.5';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -5270,7 +5270,7 @@ function arSection(S, r) {
     <div id="arMeta">${dv('Template', esc(r.template_name || 'None'))}${dv('Sender', esc(r.sender_name || 'None'))}${dv('Zillow accounts', accts.length ? accts.map(a => `<div>${esc(a)}</div>`).join('') : 'None')}
     ${dv('Last script run', isFinite(lastMin) ? esc(agoText(Math.max(0, lastMin))) : 'No run yet')}${dv('Today', `${esc(Number(r.skipped_today) || 0)} skipped · ${failed > 0 ? `<span class="warntext">${esc(failed)} failed</span>` : '0 failed'}`)}</div>
     ${unl.length ? `<div class="syscheck bad" id="arAlert" style="margin-top:12px"><b>New leads came from an account that is not on the list. They were not answered.</b>${unl.map(u => `<div class="arunl">${esc(u.account)}: ${esc(u.n)} in the last 7 days</div>`).join('')}</div>` : ''}
-    ${r.compare_since && cmp ? `<div id="arCompare" style="margin-top:12px"><b>Comparison</b><div>Since ${esc(fmtShort(r.compare_since))}: ${esc(Number(cmp.loopin_only) || 0)} LoopIn reply not found in Ricky's Gmail · ${esc(Number(cmp.sent_only) || 0)} replies in Ricky's Gmail that LoopIn didn't log.</div><div class="sub">Both should be 0 before Live.</div></div>` : ''}
+    ${r.compare_since && cmp ? `<div id="arCompare" style="margin-top:12px"><b>Comparison</b><div>Since ${esc(fmtShort(r.compare_since))}: ${esc(Number(cmp.loopin_only) || 0)} LoopIn reply not found in Ricky's Gmail · ${esc(Number(cmp.sent_only) || 0)} replies in Ricky's Gmail that LoopIn didn't log.</div></div>` : ''}
     <h4 style="margin-top:14px">Log</h4>${log.length ? `<div class="tablewrap" id="arLog"><table><thead><tr><th>Time</th><th>Account</th><th>Status</th><th>Reason</th></tr></thead><tbody>${log.map(l => `<tr><td class="nowrap">${esc(arStamp(l.created_at))}</td><td>${esc(l.zillow_account || '')}</td><td><span class="pill ${AR_PILL[l.status] || 'info'}">${esc(l.status || '')}</span></td><td>${esc(l.reason || '')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-s" id="arLogEmpty">Nothing yet.</div>'}</div>`;
 }
 function pageAutoReply(S) {
