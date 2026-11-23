@@ -3767,22 +3767,22 @@ async function loadBreakdown(force) {
     }
     if (gen !== loadGen) return;
     // v3.4: a manager also loads the YGL inventory. A failure here never hides the lead tables.
-    let ygl = [], run = null, yerr = '';
+    let ygl = [], run = null, yerr = '', excl = new Map();
     if (isMgr()) {
       try {
         for (let after = null; ;) {
           const rows = await api.yglListings(after);
           if (gen !== loadGen) return;
-          for (const r of rows) { const addr = `${r.street_number || ''} ${r.street_name || ''}`.trim(); ygl.push({ id: r.ygl_id, street: streetKey(addr), zip: r.zip || null, no: houseNoOf(addr), bed: bedBucket(r.beds), price: Number(r.price), at: r.fetched_at, area: NO_RULE }); }
+          for (const r of rows) { const addr = `${r.street_number || ''} ${r.street_name || ''}`.trim(), st = streetKey(addr), no = houseNoOf(addr), ex = yglExcluded(no, st); if (ex) { excl.set(ex, (excl.get(ex) || 0) + 1); continue; } ygl.push({ id: r.ygl_id, street: st, zip: r.zip || null, no, ib: invBed(r.beds), bed: bedBucket(r.beds), price: Number(r.price), at: r.fetched_at, area: NO_RULE }); }
           if (rows.length < PAGE) break;
           after = rows[rows.length - 1].ygl_id;
         }
         run = (await api.yglLastRun())[0] || null;
         if (gen !== loadGen) return;
-      } catch (e) { if (gen !== loadGen) return; ygl = []; run = null; yerr = e.message || 'Could not load the YGL inventory.'; }
+      } catch (e) { if (gen !== loadGen) return; ygl = []; run = null; excl = new Map(); yerr = e.message || 'Could not load the YGL inventory.'; }
     }
     BR.rules = rules; BR.firsts = firsts; BR.rulesLoaded = BR.firstsLoaded = true;
-    BR.ygl = ygl; BR.yglRun = run; BR.yglErr = yerr; BR.yglLoaded = !yerr;
+    BR.ygl = ygl; BR.yglExcl = excl; BR.yglRun = run; BR.yglErr = yerr; BR.yglLoaded = !yerr;
     recomputeAreas();
   } catch (e) { if (gen !== loadGen) return; BR.err = e.message || 'Could not load the lead locations.'; }
   BR.loading = false; refreshBR();
@@ -3829,7 +3829,7 @@ function bdLabel(dim, v) {
   return v;
 }
 // Column headers for a bedroom bucket (v3.5), the same in the lead, inventory and gap tables.
-const BED_HEAD = { Studio: 'Studio', '1': '1 Bedroom', '2': '2 Bedrooms', '3': '3 Bedrooms', '4+': '4+ Bedrooms', Unknown: 'Unknown' };
+const BED_HEAD = { Studio: 'Studio', '1': '1 Bedroom', '2': '2 Bedrooms', '3': '3 Bedrooms', '4+': '4+ Bedrooms', '4': '4 Bedrooms', '5': '5 Bedrooms', '6+': '6+ Bedrooms', Unknown: 'Unknown' };
 // Why a lead lands in these rows (checked 2026-10-30: every Zillow lead had an address; the leads with none were Apartments.com,
 // website and YGL leads, whose FUB record has no listing, plus Zillow inquiries that came without a bedroom count).
 const UNKNOWN_WHY = {
@@ -3840,7 +3840,18 @@ const UNKNOWN_WHY = {
 const GAP_KEY = 'loopin.gapThreshold', GAP_DEFAULT = 5, YGL_OLD_HOURS = 36;
 function gapPref() { try { const n = parseFloat(localStorage.getItem(GAP_KEY)); return n > 0 ? n : GAP_DEFAULT; } catch (_) { return GAP_DEFAULT; } }
 function setGapPref(v) { try { localStorage.setItem(GAP_KEY, String(v)); return true; } catch (_) { return false; } }
-const YGL_COLS = ['Studio', '1', '2', '3', '4+'];
+const YGL_COLS = ['Studio', '1', '2', '3', '4+'];   // the gap card (leads have only 4+)
+// v5.6: the inventory card splits 4+ into 4, 5 and 6+ (Greg 2026-11-23).
+const YGL_INV_COLS = ['Studio', '1', '2', '3', '4', '5', '6+'];
+const invBed = (b) => { const n = parseInt(b, 10); return b == null || isNaN(n) || n < 0 ? 'Unknown' : n === 0 ? 'Studio' : n >= 6 ? '6+' : String(n); };
+// v5.6: listings at these buildings are left out of both cards (luxury buildings run by large management companies, Greg 2026-11-23).
+// Matched by house number + street (streetKey), so every unit in the building is out. Manager = YGL's "Listing provider" or the building's own site.
+const YGL_EXCLUDED = [['345', 'Harrison Ave', 'UDR'], ['1', 'Devonshire Pl', 'Bozzuto'], ['180', 'Brookline Ave', 'Samuels & Associates'],
+  ['660', 'Washington St', 'Equity Residential'], ['45', 'Stuart St', 'Greystar'], ['1330', 'Boylston St', 'Samuels & Associates'],
+  ['665', 'Washington St', 'Bozzuto'], ['790', 'Boylston St', 'AvalonBay'], ['101', 'Canal St', 'Equity Residential'],
+  ['75', 'Saint Alphonsus St', 'JVUE'], ['75', 'St. Alphonsus St', 'JVUE'], ['75', 'St Alphonsus St', 'JVUE']];
+const YGL_EXCL_KEY = new Map(YGL_EXCLUDED.map(([no, st, mgr]) => [`${no}|${streetKey(st)}`, `${no} ${st} (${mgr})`]));
+const yglExcluded = (no, street) => YGL_EXCL_KEY.get(`${no}|${street}`) || null;
 const median = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
 // { area -> { 'Studio': [prices], ..., all: [prices] } }. A listing with no bedroom count is only in "all" (the row order).
 function yglByArea() {
@@ -3848,7 +3859,7 @@ function yglByArea() {
   for (const l of BR.ygl) {
     const e = m.get(l.area) || m.set(l.area, { all: [] }).get(l.area);
     e.all.push(l.price);
-    if (YGL_COLS.includes(l.bed)) (e[l.bed] = e[l.bed] || []).push(l.price);
+    if (YGL_INV_COLS.includes(l.ib)) (e[l.ib] = e[l.ib] || []).push(l.price);
   }
   return m;
 }
@@ -3867,9 +3878,10 @@ function yglCardHtml() {
   const when = newest ? new Date(newest).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   const by = yglByArea(), areas = [...by.keys()].sort((a, b) => by.get(b).all.length - by.get(a).all.length || a.localeCompare(b));
   return `<section class="card bdbox" id="yglInv"><h3>YGL inventory</h3><p class="sub bdfoot" id="yglAsOf">${when ? `As of ${esc(when)} · ` : ''}${esc(plural(n, 'listing', 'listings'))} ${pill}</p>`
-    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="yglTbl"><thead><tr><th>Area</th>${YGL_COLS.map(c => `<th class="num">${BED_HEAD[c]}</th>`).join('')}</tr></thead><tbody>${areas.map(a => {
+    + (BR.yglExcl && BR.yglExcl.size ? (() => { const k = [...BR.yglExcl.values()].reduce((t, x) => t + x, 0); return `<p class="sub bdfoot" id="yglExclNote" title="${esc([...BR.yglExcl.entries()].map(([b, c]) => `${b}: ${c}`).join('\n'))}">Leaves out ${esc(plural(k, 'listing', 'listings'))} at ${esc(plural(BR.yglExcl.size, 'luxury building', 'luxury buildings'))} run by large management companies. Hover for the list.</p>`; })() : '')
+    + (areas.length ? `<div class="bdscroll"><table class="bdtbl" id="yglTbl"><thead><tr><th>Area</th>${YGL_INV_COLS.map(c => `<th class="num">${BED_HEAD[c]}</th>`).join('')}</tr></thead><tbody>${areas.map(a => {
       const e = by.get(a);
-      return `<tr data-yarea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${YGL_COLS.map(c => yglCell(e[c])).join('')}</tr>`;
+      return `<tr data-yarea="${esc(a)}"><td>${esc(a)}${a === NO_RULE ? ' <button class="lnkbtn linky" data-bdareas>Add rules</button>' : ''}</td>${YGL_INV_COLS.map(c => yglCell(e[c])).join('')}</tr>`;
     }).join('')}</tbody></table></div>` : '<div class="empty-s">No listings.</div>')
     + (areas.length ? '<p class="sub bdfoot" id="yglPriceNote">Price = median monthly rent (the middle listing). Hover a cell for the average.</p>' : '') + '</section>';
 }
