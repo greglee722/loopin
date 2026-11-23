@@ -3849,7 +3849,8 @@ const invBed = (b) => { const n = parseInt(b, 10); return b == null || isNaN(n) 
 const YGL_EXCLUDED = [['345', 'Harrison Ave', 'UDR'], ['1', 'Devonshire Pl', 'Bozzuto'], ['180', 'Brookline Ave', 'Samuels & Associates'],
   ['660', 'Washington St', 'Equity Residential'], ['45', 'Stuart St', 'Greystar'], ['1330', 'Boylston St', 'Samuels & Associates'],
   ['665', 'Washington St', 'Bozzuto'], ['790', 'Boylston St', 'AvalonBay'], ['101', 'Canal St', 'Equity Residential'],
-  ['75', 'Saint Alphonsus St', 'JVUE'], ['75', 'St. Alphonsus St', 'JVUE'], ['75', 'St Alphonsus St', 'JVUE']];
+  ['75', 'Saint Alphonsus St', 'JVUE'], ['75', 'St. Alphonsus St', 'JVUE'], ['75', 'St Alphonsus St', 'JVUE'],
+  ['225', 'Massachusetts Ave', 'Brookfield Properties'], ['770', 'Boylston St', 'AvalonBay']];
 const YGL_EXCL_KEY = new Map(YGL_EXCLUDED.map(([no, st, mgr]) => [`${no}|${streetKey(st)}`, `${no} ${st} (${mgr})`]));
 const yglExcluded = (no, street) => YGL_EXCL_KEY.get(`${no}|${street}`) || null;
 const median = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
