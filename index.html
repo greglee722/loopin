@@ -5215,7 +5215,7 @@ function pageTplEdit(S, T) {
       <div class="field"><label for="tdName">Name</label><input id="tdName" data-td="name" value="${esc(d.name)}" ${dis}></div>
       <div class="field"><label for="tdSubj">Subject</label><input id="tdSubj" data-td="subject" value="${esc(d.subject)}" ${dis}></div>
       <div class="field"><label for="tdBody">Message (HTML)</label><textarea id="tdBody" data-td="body_html" rows="12" ${dis}>${esc(d.body_html)}</textarea></div>
-      <div class="field"><label class="row" style="gap:8px;align-items:center;font-weight:normal"><input type="checkbox" id="tdSig" ${d.add_signature ? 'checked' : ''} ${dis}>Add my signature</label><div class="sub" id="tdSigNote">Adds a line with "--", then the sender's name and phone, at the end of the email. Zillow auto-replies never have a signature.</div></div>
+      <div class="field"><label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink);font-weight:normal"><input type="checkbox" id="tdSig" style="width:auto;margin:0;padding:0" ${d.add_signature ? 'checked' : ''} ${dis}>Add my signature</label><div class="sub" id="tdSigNote">Adds a line with "--", then the sender's name and phone, at the end of the email. Zillow auto-replies never have a signature.</div></div>
       ${ro ? '' : `<div class="field"><label>Insert a blank</label><div class="chips">${TPL_TOKENS.map(k => `<button type="button" class="chip" data-tok="${esc(k)}" ${sdis()}>{${esc(k)}}</button>`).join('')}</div></div>`}
       <div class="err" id="setErr"></div>
       ${!ro && !d.isNew && !d.fub_id ? `<div class="row" style="margin-top:8px"><button class="btn small danger" data-tpldel ${sdis()}>Delete template</button></div>` : ''}</div>
