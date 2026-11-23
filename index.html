@@ -3913,6 +3913,9 @@ function gapStatus(e, th) {
   return 'Covered';
 }
 const GAP_CLS = { 'No inventory': 'gapbad', 'Tight': 'gapwarn', 'Room for ads': 'gapok', 'Covered': '' };
+// v5.6: the Leads vs inventory card is hidden for now (Greg 2026-11-23: "let's hide the leads v inventory right now").
+// The code stays; the test harness turns it back on with window.LOOPIN_SHOW_GAP. Set this to true to show it again.
+const SHOW_GAP = !!window.LOOPIN_SHOW_GAP;
 function gapCardHtml() {
   const th = gapPref(), { m, unknown } = gapCompute();
   const tot = (a) => GAP_COLS.reduce((t, c) => t + ((m.get(a)[c] || {}).leads || 0), 0);
@@ -3972,7 +3975,7 @@ function breakdownHtml() {
   };
   const note = (BR.err ? `<p class="sub bdnote" id="bdErr">Could not refresh: ${esc(BR.err)} <button class="btn small" id="bdRetry">Try again</button></p>` : '') + (state.loading ? `<p class="sub bdnote">People are still loading, so counts can grow.</p>` : '')
     + (drafts ? `<p class="sub bdnote" id="bdDrafts">${drafts} area rule${drafts === 1 ? ' is a draft' : 's are drafts'}. Confirm ${drafts === 1 ? 'it' : 'them'} in <button class="lnkbtn linky" data-bdareas>Settings &rsaquo; Areas</button>.</p>` : '');
-  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div><div class="bdwide">${bdAreaBedsHtml(ab)}${isMgr() ? yglCardHtml() + gapCardHtml() : ''}</div>`);
+  return wrap(head(ctl) + figs + note + `<div class="bdgrid">${bdDims().map(d => table(d[0], d[1])).join('')}</div><div class="bdwide">${bdAreaBedsHtml(ab)}${isMgr() ? yglCardHtml() + (SHOW_GAP ? gapCardHtml() : '') : ''}</div>`);
 }
 // Redraw only this tab.
 function bdRender() { const el = $('#bd-main'); if (el) el.outerHTML = breakdownHtml(); else $('#breakdown').innerHTML = breakdownHtml(); }
