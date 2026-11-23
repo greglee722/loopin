@@ -931,7 +931,7 @@ const NOTE_COLS = 'id,kind,body,author_id,created_at';
 const OPT_COLS = 'id,person_id,address,rent,beds,available_on,url,ygl_listing_id,broker_fee,offer,status,shared_at,shared_by,note,off_market';   // v3.6: lead_options; v3.7: note (supabase/21); v3.9: off_market (supabase/22)
 const APPT_COLS = 'id,member_id,person_id,calendar_event_id,starts_at,ends_at,title,kind,calendly,canceled,canceled_at,canceled_by,cancel_reason,cancel_note,fub_id,created_at,invitee_email,listings,mode,prep_note,created_by';   // v4.0: listings, mode, prep_note (supabase/23), created_by
 const LIST_COLS = 'id,name,description,filters,owner_id,hidden_from_agents,sort_order,created_by';
-const TPL_COLS = 'id,name,subject,body_html,active,fub_id,owner_id,created_at,updated_at';
+const TPL_COLS = 'id,name,subject,body_html,add_signature,active,fub_id,owner_id,created_at,updated_at';
 const AREA_COLS = 'id,street,zip,from_no,to_no,area,draft,created_by,created_at,updated_at';
 
 // Every function returns data or throws an Error with the database message.
@@ -4834,7 +4834,7 @@ $('#view-renew').addEventListener('change', e => {
 
 // ───────── Settings (managers only) ─────────
 // Pilot rules: stage names are locked (the FUB sync matches stages by name); a field's key, type and fub_name never change.
-const APP_VERSION = '5.5';
+const APP_VERSION = '5.6';
 const SUPABASE_PLAN = 'Free';   // from the project notes (2026-10-27); update when the plan changes
 const FIELD_TYPES = [['dropdown', 'Dropdown'], ['yesno', 'Yes / No'], ['number', 'Number'], ['date', 'Date'], ['daterange', 'Date range'], ['multiselect', 'Multiple choice'], ['text', 'Text']];
 const isMgr = () => !!state.me && state.me.role === 'manager';
@@ -5124,8 +5124,8 @@ function pageMine(S) {
 }
 
 // Email templates
-const tplDraftOf = (r) => ({ id: r.id, isNew: false, name: r.name || '', subject: r.subject || '', body_html: r.body_html || '', owner_id: r.owner_id || null, fub_id: r.fub_id || null });
-const tplSig = (d) => JSON.stringify([d.name, d.subject, d.body_html]);
+const tplDraftOf = (r) => ({ id: r.id, isNew: false, name: r.name || '', subject: r.subject || '', body_html: r.body_html || '', add_signature: !!r.add_signature, owner_id: r.owner_id || null, fub_id: r.fub_id || null });
+const tplSig = (d) => JSON.stringify([d.name, d.subject, d.body_html, !!d.add_signature]);
 // A message typed as plain text (no HTML tags) becomes HTML paragraphs, so its line breaks survive in the email.
 const asHtml = (s) => /<\/?(p|br|div|span|a|b|i|u|strong|em|font|ul|ol|li|table|tbody|tr|td|th|h[1-6]|img|hr|blockquote|center)\b[^>]*>|<!--/i.test(s) || !String(s).trim() ? s : String(s).trim().split(/\r?\n\s*\r?\n/).map(par => `<p>${esc(par.trim()).replace(/\r?\n/g, '<br>')}</p>`).join('\n');
 const tplDirty = () => { const T = state.set.tpl; return !!(T && T.draft && !T.draft.owner_id && tplSig(T.draft) !== T.base); };
@@ -5199,6 +5199,7 @@ function pageTplEdit(S, T) {
       <div class="field"><label for="tdName">Name</label><input id="tdName" data-td="name" value="${esc(d.name)}" ${dis}></div>
       <div class="field"><label for="tdSubj">Subject</label><input id="tdSubj" data-td="subject" value="${esc(d.subject)}" ${dis}></div>
       <div class="field"><label for="tdBody">Message (HTML)</label><textarea id="tdBody" data-td="body_html" rows="12" ${dis}>${esc(d.body_html)}</textarea></div>
+      <div class="field"><label class="row" style="gap:8px;align-items:center;font-weight:normal"><input type="checkbox" id="tdSig" ${d.add_signature ? 'checked' : ''} ${dis}>Add my signature</label><div class="sub" id="tdSigNote">Adds a line with "--", then the sender's name and phone, at the end of the email. Zillow auto-replies never have a signature.</div></div>
       ${ro ? '' : `<div class="field"><label>Insert a blank</label><div class="chips">${TPL_TOKENS.map(k => `<button type="button" class="chip" data-tok="${esc(k)}" ${sdis()}>{${esc(k)}}</button>`).join('')}</div></div>`}
       <div class="err" id="setErr"></div>
       ${!ro && !d.isNew && !d.fub_id ? `<div class="row" style="margin-top:8px"><button class="btn small danger" data-tpldel ${sdis()}>Delete template</button></div>` : ''}</div>
@@ -5216,14 +5217,14 @@ async function tWrite(fn) {
   try { await fn(); } catch (e) { toast(e.message || 'The change was not saved.'); ok = false; }
   S.busy = false; renderSettings(); return ok;
 }
-function syncDraft() { const T = tplTS(); if (!T.draft || T.draft.owner_id) return; for (const [id, k] of [['tdName', 'name'], ['tdSubj', 'subject'], ['tdBody', 'body_html']]) { const x = $('#' + id); if (x) T.draft[k] = x.value; } }
+function syncDraft() { const T = tplTS(); if (!T.draft || T.draft.owner_id) return; for (const [id, k] of [['tdName', 'name'], ['tdSubj', 'subject'], ['tdBody', 'body_html']]) { const x = $('#' + id); if (x) T.draft[k] = x.value; } const sg = $('#tdSig'); if (sg) T.draft.add_signature = sg.checked; }
 async function tplSave() {
   const S = state.set, T = tplTS(); if (!T.draft || T.draft.owner_id || S.busy) return;
   syncDraft(); const d = T.draft, name = d.name.trim(), body_html = asHtml(d.body_html);
   if (!name) return setErr('A template needs a name.');
   await tWrite(async () => {
-    const row = d.isNew ? await api.addTemplate({ name, subject: d.subject, body_html, owner_id: null, active: true, fub_id: null })
-      : await api.updateTemplate(d.id, { name, subject: d.subject, body_html, updated_at: new Date().toISOString() });
+    const row = d.isNew ? await api.addTemplate({ name, subject: d.subject, body_html, add_signature: !!d.add_signature, owner_id: null, active: true, fub_id: null })
+      : await api.updateTemplate(d.id, { name, subject: d.subject, body_html, add_signature: !!d.add_signature, updated_at: new Date().toISOString() });
     T.rows = d.isNew ? [...T.rows, row] : T.rows.map(x => String(x.id) === String(row.id) ? row : x);
     T.draft = tplDraftOf(row); T.base = tplSig(T.draft); toast('Saved.');
   });
@@ -5379,7 +5380,7 @@ $('#settingsBody').addEventListener('click', async e => {
   }
   const tf = el('[data-tfilter]'); if (tf) { tplTS().filter = tf.dataset.tfilter; renderSettings(); return; }
   const to = el('[data-topen]'); if (to) { const r = tplTS().rows.find(x => String(x.id) === to.dataset.topen); if (r) openTpl(tplDraftOf(r)); return; }
-  if (el('[data-tplnew]')) { if (!S.busy) openTpl({ id: null, isNew: true, name: '', subject: '', body_html: '', owner_id: null, fub_id: null }); return; }
+  if (el('[data-tplnew]')) { if (!S.busy) openTpl({ id: null, isNew: true, name: '', subject: '', body_html: '', add_signature: false, owner_id: null, fub_id: null }); return; }
   if (el('[data-tplretry]')) { tplTS().err = ''; loadTpl(); return; }
   const tk = el('[data-tok]'); if (tk) {
     const T = tplTS(), ae = document.activeElement, f = $('#' + (ae && (ae.id === 'tdSubj' || ae.id === 'tdBody') ? ae.id : T.last));
@@ -5533,6 +5534,7 @@ $('#settingsBody').addEventListener('input', e => {
   if (t.dataset.my) { S.my = S.my || {}; S.my[t.dataset.my] = t.value; return; }
   const T = S.tpl; if (!T) return;
   if (t.id === 'tplQ') { T.q = t.value; $('#tplRows').innerHTML = tplRowsHtml(T); return; }
+  if (t.id === 'tdSig' && T.draft) { T.draft.add_signature = t.checked; return; }
   if (t.dataset.td && T.draft) { T.draft[t.dataset.td] = t.value; if (t.id === 'tdSubj' || t.id === 'tdBody') T.last = t.id; refreshPrev(); return; }
   if (t.id === 'tdLeadQ') { T.prevQ = t.value; $('#tdLeadRes').innerHTML = leadResHtml(T); }
 });
